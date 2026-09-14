@@ -29,23 +29,23 @@ class Scheduler:
         # prefill
         while self.waiting and len(scheduled_seqs) < self.max_num_seqs:
             seq = self.waiting[0]
-            remaining = self.max_num_batched_tokens - num_batched_tokens
+            remaining = self.max_num_batched_tokens - num_batched_tokens # 计算本批剩余 Token 容量
             if remaining == 0:
                 break
-            if not seq.block_table:
-                num_cached_blocks = self.block_manager.can_allocate(seq)
+            if not seq.block_table: #第一次进入prefill
+                num_cached_blocks = self.block_manager.can_allocate(seq) # >= 0：可以分配，并且前面有这么多个 Block 可以复用
                 if num_cached_blocks == -1:
                     break
                 num_tokens = seq.num_tokens - num_cached_blocks * self.block_size
-            else:
+            else: # 进入过prefill，但是由于remaining不足，未能完成prefill
                 num_tokens = seq.num_tokens - seq.num_cached_tokens
             if remaining < num_tokens and scheduled_seqs:  # only allow chunked prefill for the first seq
                 break
-            if not seq.block_table:
-                self.block_manager.allocate(seq, num_cached_blocks)
+            if not seq.block_table: # 没有kv cache blcok
+                self.block_manager.allocate(seq, num_cached_blocks) # 真正建立 Block 映射并占用资源
             seq.num_scheduled_tokens = min(num_tokens, remaining)
             num_batched_tokens += seq.num_scheduled_tokens
-            if seq.num_cached_tokens + seq.num_scheduled_tokens == seq.num_tokens:
+            if seq.num_cached_tokens + seq.num_scheduled_tokens == seq.num_tokens: # prefill 之后进入 decode 阶段
                 seq.status = SequenceStatus.RUNNING
                 self.waiting.popleft()
                 self.running.append(seq)

@@ -19,6 +19,7 @@ class LLMEngine:
         config_kwargs = {k: v for k, v in kwargs.items() if k in config_fields}
         config = Config(model, **config_kwargs)
         Sequence.block_size = config.kvcache_block_size
+        # 创建 spawn 多进程上下文
         self.ps = []
         self.events = []
         ctx = mp.get_context("spawn")

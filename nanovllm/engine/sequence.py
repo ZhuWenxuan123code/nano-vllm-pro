@@ -18,7 +18,7 @@ class Sequence:
     def __init__(self, token_ids: list[int], sampling_params = SamplingParams()):
         self.seq_id = next(Sequence.counter)
         self.status = SequenceStatus.WAITING
-        self.token_ids = copy(token_ids)
+        self.token_ids = copy(token_ids) # 使用copy，避免引用
         self.last_token = token_ids[-1]
         self.num_tokens = len(self.token_ids)
         self.num_prompt_tokens = len(token_ids)

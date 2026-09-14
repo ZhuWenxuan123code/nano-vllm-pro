@@ -44,7 +44,7 @@ class BlockManager:
         block_id = self.free_block_ids.popleft()
         block = self.blocks[block_id]
         assert block.ref_count == 0
-        if block.hash != -1 and self.hash_to_block_id.get(block.hash) == block_id:
+        if block.hash != -1 and self.hash_to_block_id.get(block.hash) == block_id: # block.hash 旧block的hash值
             del self.hash_to_block_id[block.hash]
         block.reset()
         self.used_block_ids.add(block_id)
@@ -54,14 +54,15 @@ class BlockManager:
         assert self.blocks[block_id].ref_count == 0
         self.used_block_ids.remove(block_id)
         self.free_block_ids.append(block_id)
-
+    
+    # 1. 检查是否有足够的 KV Cache Block; 2.检查 Prompt 前缀是否已经存在于 Prefix Cache
     def can_allocate(self, seq: Sequence) -> int:
         h = -1
         num_cached_blocks = 0
         num_new_blocks = seq.num_blocks
         for i in range(seq.num_blocks - 1):
             token_ids = seq.block(i)
-            h = self.compute_hash(token_ids, h)
+            h = self.compute_hash(token_ids, h) # 获取hash值
             block_id = self.hash_to_block_id.get(h, -1)
             if block_id == -1 or self.blocks[block_id].token_ids != token_ids:
                 break
@@ -78,11 +79,11 @@ class BlockManager:
         for i in range(num_cached_blocks):
             token_ids = seq.block(i)
             h = self.compute_hash(token_ids, h)
-            block_id = self.hash_to_block_id[h]
+            block_id = self.hash_to_block_id[h] # 物理 block id
             block = self.blocks[block_id]
-            if block_id in self.used_block_ids:
+            if block_id in self.used_block_ids: # 缓存 Block 正在被其他请求使用
                 block.ref_count += 1
-            else:
+            else:                               # 缓存 Block 当前空闲
                 block.ref_count = 1
                 self.free_block_ids.remove(block_id)
                 self.used_block_ids.add(block_id)
@@ -99,7 +100,10 @@ class BlockManager:
                 self._deallocate_block(block_id)
         seq.num_cached_tokens = 0
         seq.block_table.clear()
-
+        
+    # 只有同时满足下面两个条件时才返回 False：
+    # 1. 当前 Token 需要开启一个新的 KV Cache Block
+    # 2. 当前一个空闲 Block 都没有
     def can_append(self, seq: Sequence) -> bool:
         return len(self.free_block_ids) >= (len(seq) % self.block_size == 1)
 
