@@ -1,5 +1,5 @@
 import atexit
-from dataclasses import fields
+from dataclasses import dataclass, fields
 from time import perf_counter
 from tqdm.auto import tqdm
 from transformers import AutoTokenizer
@@ -10,6 +10,15 @@ from nanovllm.sampling_params import SamplingParams
 from nanovllm.engine.sequence import Sequence
 from nanovllm.engine.scheduler import Scheduler
 from nanovllm.engine.model_runner import ModelRunner
+
+
+@dataclass(slots=True)
+class StepInfo:
+    is_prefill: bool
+    num_scheduled_tokens: int
+    num_scheduled_seqs: int
+    generated_seq_ids: list[int]
+    finished_seq_ids: list[int]
 
 
 class LLMEngine:
@@ -41,18 +50,31 @@ class LLMEngine:
         for p in self.ps:
             p.join()
 
-    def add_request(self, prompt: str | list[int], sampling_params: SamplingParams):
+    def add_request(self, prompt: str | list[int], sampling_params: SamplingParams) -> int:
         if isinstance(prompt, str):
             prompt = self.tokenizer.encode(prompt)
         seq = Sequence(prompt, sampling_params)
         self.scheduler.add(seq)
+        return seq.seq_id
 
-    def step(self):
+    def step_with_info(self) -> tuple[list[tuple[int, list[int]]], StepInfo]:
         seqs, is_prefill = self.scheduler.schedule()
-        num_tokens = sum(seq.num_scheduled_tokens for seq in seqs) if is_prefill else -len(seqs)
+        num_scheduled_tokens = sum(seq.num_scheduled_tokens for seq in seqs) if is_prefill else len(seqs)
         token_ids = self.model_runner.call("run", seqs, is_prefill)
-        self.scheduler.postprocess(seqs, token_ids, is_prefill)
+        generated_seq_ids = self.scheduler.postprocess(seqs, token_ids, is_prefill)
         outputs = [(seq.seq_id, seq.completion_token_ids) for seq in seqs if seq.is_finished]
+        info = StepInfo(
+            is_prefill=is_prefill,
+            num_scheduled_tokens=num_scheduled_tokens,
+            num_scheduled_seqs=len(seqs),
+            generated_seq_ids=generated_seq_ids,
+            finished_seq_ids=[seq_id for seq_id, _ in outputs],
+        )
+        return outputs, info
+
+    def step(self) -> tuple[list[tuple[int, list[int]]], int]:
+        outputs, info = self.step_with_info()
+        num_tokens = info.num_scheduled_tokens if info.is_prefill else -info.num_scheduled_tokens
         return outputs, num_tokens
 
     def is_finished(self):

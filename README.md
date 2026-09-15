@@ -46,7 +46,10 @@ outputs[0]["text"]
 ## Benchmark
 
 See `bench.py` for benchmark.
-
+``` python
+CUDA_VISIBLE_DEVICES=1 python bench.py
+CUDA_VISIBLE_DEVICES=1,3 python bench.py --tensor-parallel-size 2
+```
 **Test Configuration:**
 - Hardware: RTX 4070 Laptop (8GB)
 - Model: Qwen3-0.6B
@@ -59,8 +62,3 @@ See `bench.py` for benchmark.
 |----------------|-------------|----------|-----------------------|
 | vLLM           | 133,966     | 98.37    | 1361.84               |
 | Nano-vLLM      | 133,966     | 93.41    | 1434.13               |
-
-
-## Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=GeeeekExplorer/nano-vllm&type=Date)](https://www.star-history.com/#GeeeekExplorer/nano-vllm&Date)
