@@ -67,8 +67,8 @@ class LLMEngine:
             is_prefill=is_prefill,
             num_scheduled_tokens=num_scheduled_tokens,
             num_scheduled_seqs=len(seqs),
-            generated_seq_ids=generated_seq_ids,
-            finished_seq_ids=[seq_id for seq_id, _ in outputs],
+            generated_seq_ids=generated_seq_ids, #
+            finished_seq_ids=[seq_id for seq_id, _ in outputs], #
         )
         return outputs, info
 

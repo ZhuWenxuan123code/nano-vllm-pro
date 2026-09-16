@@ -9,7 +9,7 @@ class Scheduler:
 
     def __init__(self, config: Config):
         self.max_num_seqs = config.max_num_seqs
-        self.max_num_batched_tokens = config.max_num_batched_tokens
+        self.max_num_batched_tokens = config.max_num_batched_tokens # 单个 step 内允许处理的 token 总数上限（只约束prefill）
         self.eos = config.eos
         self.block_size = config.kvcache_block_size
         self.block_manager = BlockManager(config.num_kvcache_blocks, config.kvcache_block_size)
@@ -85,10 +85,12 @@ class Scheduler:
         is_prefill: bool,
     ) -> list[int]:
         generated_seq_ids = []
-        for seq, token_id in zip(seqs, token_ids):
+        for seq, token_id in zip(seqs, token_ids): # token_id: 采样出的下一个 token
             self.block_manager.hash_blocks(seq)
             seq.num_cached_tokens += seq.num_scheduled_tokens
             seq.num_scheduled_tokens = 0
+
+            # 一个长 Prompt 可能被拆成多轮计算。如果本轮只处理了部分 Prompt，就不能把模型采样结果当作正式输出，因此直接进入下一个序列
             if is_prefill and seq.num_cached_tokens < seq.num_tokens:
                 continue
             seq.append_token(token_id)

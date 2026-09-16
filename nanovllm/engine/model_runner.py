@@ -136,8 +136,8 @@ class ModelRunner:
         slot_mapping = []
         block_tables = None
         for seq in seqs:
-            start = seq.num_cached_tokens
-            seqlen_q = seq.num_scheduled_tokens
+            start = seq.num_cached_tokens # 已缓存的前缀长度
+            seqlen_q = seq.num_scheduled_tokens # 本次要算多少个 token
             end = start + seqlen_q
             seqlen_k = end
             input_ids.extend(seq[start:end])

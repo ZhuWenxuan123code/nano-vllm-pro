@@ -5,6 +5,9 @@ from pathlib import Path
 from time import perf_counter
 from random import randint, seed
 
+import torch
+from nanovllm import LLM, SamplingParams
+
 
 def percentile(values, percent):
     if not values:
@@ -24,8 +27,10 @@ def parse_args(argv=None):
         default="~/huggingface/Qwen3-0.6B/",
         help="Local model directory.",
     )
-    parser.add_argument("--num-prompts", type=int, default=256) #本次 benchmark 一共生成多少条请求/提示词。
-    parser.add_argument(                                        #引擎调度时，单个 batch 最多同时处理多少条序列。
+    parser.add_argument(
+        "--num-prompts", type=int, default=256
+    )  # 本次 benchmark 一共生成多少条请求/提示词。
+    parser.add_argument(  # 引擎调度时，单个 batch 最多同时处理多少条序列。
         "--max-num-seqs",
         type=int,
         default=512,
@@ -47,19 +52,25 @@ def parse_args(argv=None):
     )
     parser.add_argument("--min-output-len", type=int, default=100)
     parser.add_argument("--max-output-len", type=int, default=1024)
-    parser.add_argument("--max-model-len", type=int, default=4096)           # 单请求最大上下文长度（prompt + output）的目标上限
-    parser.add_argument("--max-num-batched-tokens", type=int, default=16384) # 单个 batch 最多处理多少token
+    parser.add_argument(
+        "--max-model-len", type=int, default=4096
+    )  # 单请求最大上下文长度（prompt + output）的目标上限
+    parser.add_argument(
+        "--max-num-batched-tokens", type=int, default=16384
+    )  # 单个 batch 最多处理多少token
     parser.add_argument("--tensor-parallel-size", type=int, default=1)
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.9)
     parser.add_argument(
         "--enforce-eager",
         action="store_true",
-        help="Disable CUDA Graph and run decode in eager mode.",             # 是否启用 cuda graph
+        help="Disable CUDA Graph and run decode in eager mode.",  # 是否启用 cuda graph
     )
     parser.add_argument("--temperature", type=float, default=0.6)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--warmup-runs", type=int, default=1)
-    parser.add_argument("--output-json", help="Write the benchmark report to this path.")
+    parser.add_argument(
+        "--output-json", help="Write the benchmark report to this path."
+    )
     args = parser.parse_args(argv)
 
     if args.input_len is not None:
@@ -86,9 +97,7 @@ def parse_args(argv=None):
     if args.min_output_len > args.max_output_len:
         parser.error("--min-output-len cannot exceed --max-output-len")
     if args.max_input_len + args.max_output_len > args.max_model_len:
-        parser.error(
-            "maximum input and output lengths cannot exceed --max-model-len"
-        )
+        parser.error("maximum input and output lengths cannot exceed --max-model-len")
     if not 0 < args.gpu_memory_utilization < 1:
         parser.error("--gpu-memory-utilization must be between 0 and 1")
     if args.temperature <= 1e-10:
@@ -125,7 +134,7 @@ def print_report(report):
     print(f"Peak allocated memory (rank 0): {metrics['peak_memory_mb']:.2f} MiB")
 
 
-def run_benchmark(llm, prompts, sampling_params, torch):
+def run_benchmark(llm: LLM, prompts, sampling_params, torch):
     seq_ids = [
         llm.add_request(prompt, params)
         for prompt, params in zip(prompts, sampling_params)
@@ -160,7 +169,7 @@ def run_benchmark(llm, prompts, sampling_params, torch):
             decode_time += step_elapsed
 
         for seq_id in info.generated_seq_ids:
-            first_token_times.setdefault(seq_id, step_end)
+            first_token_times.setdefault(seq_id, step_end) # 第一个 token 生成完成的时间
         for seq_id in info.finished_seq_ids:
             finish_times[seq_id] = step_end
     benchmark_end = perf_counter()
@@ -204,12 +213,6 @@ def run_benchmark(llm, prompts, sampling_params, torch):
 def main():
     args = parse_args()
 
-    import torch
-    from nanovllm import LLM, SamplingParams
-
-    # from vllm import LLM, SamplingParams
-
-    seed(args.seed)
     torch.manual_seed(args.seed)
 
     path = os.path.expanduser(args.model)
@@ -276,7 +279,7 @@ def main():
         "metrics": metrics,
     }
     print_report(report)
-    
+
     # 将结果保存到json
     if args.output_json:
         output_path = Path(os.path.expanduser(args.output_json))
