@@ -213,6 +213,7 @@ def run_benchmark(llm: LLM, prompts, sampling_params, torch):
 def main():
     args = parse_args()
 
+    seed(args.seed)
     torch.manual_seed(args.seed)
 
     path = os.path.expanduser(args.model)

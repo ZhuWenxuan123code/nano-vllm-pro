@@ -10,7 +10,10 @@
 CUDA_VISIBLE_DEVICES=0 \
 MODEL_PATH=/path/to/Qwen3-0.6B \
 RUNS=3 \
+bash benchmarks/scripts/run_random.sh
 bash benchmarks/scripts/run_balanced.sh
+bash benchmarks/scripts/run_decode_heavy.sh
+bash benchmarks/scripts/run_prefill_heavy.sh
 ```
 
 优化后使用独立结果目录运行同一工作负载：
