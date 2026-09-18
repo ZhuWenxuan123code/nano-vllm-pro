@@ -235,6 +235,7 @@ class ModelRunner:
         self.graphs = {}
         self.graph_pool = None
 
+        # 从大 batch 往小 batch 依次捕获。这样首张图创建的 memory pool 可以被后面图复用
         for bs in reversed(self.graph_bs):
             graph = torch.cuda.CUDAGraph()
             set_context(False, slot_mapping=slot_mapping[:bs], context_lens=context_lens[:bs], block_tables=block_tables[:bs])

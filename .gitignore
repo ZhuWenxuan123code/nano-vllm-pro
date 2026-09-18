@@ -196,3 +196,6 @@ cython_debug/
 
 # Local benchmark results
 benchmarks/results/
+
+# Local profiler traces and reports
+benchmarks/profiles/
