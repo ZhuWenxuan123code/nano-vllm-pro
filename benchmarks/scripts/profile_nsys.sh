@@ -16,7 +16,7 @@ fi
 
 python_bin="${PYTHON_BIN:-python}"
 model_path="${MODEL_PATH:-$HOME/huggingface/Qwen3-0.6B}"
-device_ids="${CUDA_VISIBLE_DEVICES:-1}"
+device_ids="${CUDA_VISIBLE_DEVICES:-2}"
 output_dir="${PROFILE_DIR:-benchmarks/profiles/baseline}/nsys"
 eager="${ENFORCE_EAGER:-0}"
 
@@ -42,6 +42,7 @@ report_base="$output_dir/$phase-$mode"
 
 CUDA_VISIBLE_DEVICES="$device_ids" nsys profile \
   --trace=cuda,nvtx,osrt \
+  --cuda-graph-trace=node \
   --sample=none \
   --capture-range=cudaProfilerApi \
   --capture-range-end=stop \

@@ -47,17 +47,21 @@ python benchmarks/compare.py \
 Torch Profiler 默认生成 Chrome Trace、JSON 汇总和文本表格：
 
 ```bash
-CUDA_VISIBLE_DEVICES=1
+CUDA_VISIBLE_DEVICES=2 # 默认使用 device 2
+INPUT_LEN=1024
 bash benchmarks/scripts/profile_torch.sh prefill
 bash benchmarks/scripts/profile_torch.sh decode
+ENFORCE_EAGER=1 bash benchmarks/scripts/profile_torch.sh decode
 ```
 
 Nsight Systems 通过 `cudaProfilerStart/Stop` 只捕获目标 step，不包含模型加载和
 CUDA Graph capture：
 
 ```bash
-ENFORCE_EAGER=1 bash benchmarks/scripts/profile_nsys.sh prefill
+INPUT_LEN=1024
+bash benchmarks/scripts/profile_nsys.sh prefill
 bash benchmarks/scripts/profile_nsys.sh decode
+ENFORCE_EAGER=1 bash benchmarks/scripts/profile_nsys.sh decode
 ```
 
 默认结果分别位于 `benchmarks/profiles/baseline/torch/` 和

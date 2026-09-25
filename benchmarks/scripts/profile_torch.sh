@@ -12,7 +12,7 @@ fi
 
 python_bin="${PYTHON_BIN:-python}"
 model_path="${MODEL_PATH:-$HOME/huggingface/Qwen3-0.6B}"
-device_ids="${CUDA_VISIBLE_DEVICES:-1}"
+device_ids="${CUDA_VISIBLE_DEVICES:-2}"
 output_dir="${PROFILE_DIR:-benchmarks/profiles/baseline}/torch"
 eager="${ENFORCE_EAGER:-0}"
 
