@@ -9,6 +9,7 @@ model_path="${MODEL_PATH:-$HOME/huggingface/Qwen3-0.6B}"
 device_ids="${CUDA_VISIBLE_DEVICES:-1}"
 result_dir="${RESULT_DIR:-benchmarks/results/baseline}"
 runs="${RUNS:-5}"
+rms_norm_backend="${RMS_NORM_BACKEND:-compiled}"
 
 for ((run = 1; run <= runs; run++)); do
   CUDA_VISIBLE_DEVICES="$device_ids" "$python_bin" bench.py \
@@ -18,6 +19,7 @@ for ((run = 1; run <= runs; run++)); do
     --input-len 128 \
     --output-len 512 \
     --max-model-len 4096 \
+    --rms-norm-backend "$rms_norm_backend" \
     --seed 0 \
     --warmup-runs 1 \
     --output-json "$result_dir/decode-${run}.json"

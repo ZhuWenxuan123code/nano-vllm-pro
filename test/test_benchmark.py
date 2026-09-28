@@ -1,3 +1,5 @@
+import contextlib
+import io
 import unittest
 from types import SimpleNamespace
 
@@ -26,6 +28,13 @@ class BenchmarkHelpersTest(unittest.TestCase):
         ])
         self.assertEqual((args.min_input_len, args.max_input_len), (512, 512))
         self.assertEqual((args.min_output_len, args.max_output_len), (128, 128))
+
+    def test_rms_norm_backend_is_explicit_and_validated(self):
+        self.assertEqual(parse_args([]).rms_norm_backend, "compiled")
+        self.assertEqual(parse_args(["--rms-norm-backend", "triton"]).rms_norm_backend, "triton")
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                parse_args(["--rms-norm-backend", "invalid"])
 
     def test_single_token_output_has_no_decode_metrics(self):
         class FakeCuda:

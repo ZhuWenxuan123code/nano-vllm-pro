@@ -59,6 +59,10 @@ def parse_args(argv=None):
         "--max-num-batched-tokens", type=int, default=16384
     )  # 单个 batch 最多处理多少token
     parser.add_argument("--tensor-parallel-size", type=int, default=1)
+    parser.add_argument(
+        "--rms-norm-backend", choices=("compiled", "triton"), default="compiled",
+        help="RMSNorm implementation used by every model runner.",
+    )
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.9)
     parser.add_argument(
         "--enforce-eager",
@@ -221,6 +225,7 @@ def main():
         path,
         enforce_eager=args.enforce_eager,
         tensor_parallel_size=args.tensor_parallel_size,
+        rms_norm_backend=args.rms_norm_backend,
         max_num_seqs=args.max_num_seqs,
         max_num_batched_tokens=args.max_num_batched_tokens,
         max_model_len=args.max_model_len,
@@ -270,6 +275,7 @@ def main():
             "max_num_batched_tokens": args.max_num_batched_tokens,
             "max_model_len": args.max_model_len,
             "tensor_parallel_size": args.tensor_parallel_size,
+            "rms_norm_backend": args.rms_norm_backend,
             "gpu_memory_utilization": args.gpu_memory_utilization,
             "enforce_eager": args.enforce_eager,
             "temperature": args.temperature,

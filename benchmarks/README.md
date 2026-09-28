@@ -23,6 +23,14 @@ RESULT_DIR=benchmarks/results/p1-rmsnorm \
 bash benchmarks/scripts/run_decode_heavy.sh
 ```
 
+P1 RMSNorm 对照可设置 `RMS_NORM_BACKEND=compiled`（默认）或 `triton`；
+`bench.py --rms-norm-backend` 也接受这两个值，结果 JSON 会记录实际后端。
+单算子延迟使用 `benchmarks/bench_rmsnorm.py`，warp 扫描使用
+`benchmarks/tune_rmsnorm.py`；两者生成的 JSON 保存在忽略提交的 `results/` 中。
+三组固定负载完整 A/B（各 5 次）可运行
+`bash benchmarks/scripts/run_p1_rmsnorm.sh`，并通过 `PYTHON_BIN`、
+`CUDA_VISIBLE_DEVICES`、`RUNS`、`RESULT_ROOT` 覆盖默认环境。
+
 汇总某个目录中的多次结果：
 
 ```bash

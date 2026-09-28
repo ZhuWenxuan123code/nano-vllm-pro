@@ -43,6 +43,7 @@ def config_mismatches(baseline, candidate):
     return sorted(
         key
         for key in keys
+        if key != "rms_norm_backend"
         if baseline_config.get(key) != candidate_config.get(key)
     )
 
@@ -71,6 +72,10 @@ def compare_cases(baseline_cases, candidate_cases):
                 f"Baseline runs: {len(baseline)}; candidate runs: {len(candidate)}",
             ]
         )
+        baseline_backend = baseline[0].get("config", {}).get("rms_norm_backend", "compiled")
+        candidate_backend = candidate[0].get("config", {}).get("rms_norm_backend", "compiled")
+        if baseline_backend != candidate_backend:
+            lines.append(f"RMSNorm backend: {baseline_backend} -> {candidate_backend}")
         if mismatches:
             lines.append(
                 "Warning: configuration differs for " + ", ".join(mismatches)

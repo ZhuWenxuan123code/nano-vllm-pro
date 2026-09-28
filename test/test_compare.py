@@ -40,6 +40,17 @@ class CompareTest(unittest.TestCase):
 
         self.assertIn("Warning: configuration differs for max_num_seqs", table)
 
+    def test_backend_difference_is_expected_in_ab_comparison(self):
+        baseline = report(100, 10)
+        candidate = report(105, 10)
+        baseline["config"] = {"max_num_seqs": 64, "rms_norm_backend": "compiled"}
+        candidate["config"] = {"max_num_seqs": 64, "rms_norm_backend": "triton"}
+
+        table = compare_cases({"balanced": [baseline]}, {"balanced": [candidate]})
+
+        self.assertIn("RMSNorm backend: compiled -> triton", table)
+        self.assertNotIn("Warning: configuration differs", table)
+
 
 if __name__ == "__main__":
     unittest.main()

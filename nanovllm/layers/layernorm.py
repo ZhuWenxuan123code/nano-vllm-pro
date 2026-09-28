@@ -1,6 +1,8 @@
 import torch
 from torch import nn
 
+from nanovllm.layers.rmsnorm_triton import add_rmsnorm, rmsnorm
+
 
 class RMSNorm(nn.Module):
 
@@ -12,6 +14,12 @@ class RMSNorm(nn.Module):
         super().__init__()
         self.eps = eps
         self.weight = nn.Parameter(torch.ones(hidden_size))
+        self.backend = "compiled"
+
+    def set_backend(self, backend: str) -> None:
+        if backend not in ("compiled", "triton"):
+            raise ValueError(f"unsupported RMSNorm backend: {backend}")
+        self.backend = backend
 
     @torch.compile
     def rms_forward(
@@ -44,6 +52,10 @@ class RMSNorm(nn.Module):
         x: torch.Tensor,
         residual: torch.Tensor | None = None,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        if self.backend == "triton":
+            if residual is None:
+                return rmsnorm(x, self.weight, self.eps)
+            return add_rmsnorm(x, residual, self.weight, self.eps)
         if residual is None:
             return self.rms_forward(x)
         else:
