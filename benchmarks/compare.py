@@ -25,7 +25,9 @@ def improvement_percent(baseline, candidate, higher_is_better):
     if baseline == 0:
         return None
     ratio = candidate / baseline
-    return (ratio - 1 if higher_is_better else 1 / ratio - 1) * 100
+    # For latency, report reduction relative to the baseline, not inverse-rate
+    # speedup. For example, 100 ms -> 80 ms is a 20% latency reduction.
+    return (ratio - 1 if higher_is_better else 1 - ratio) * 100
 
 
 def format_value(value):
@@ -43,7 +45,7 @@ def config_mismatches(baseline, candidate):
     return sorted(
         key
         for key in keys
-        if key not in ("rms_norm_backend", "fuse_decode_qk_rope_cache", "execution_mode")
+        if key not in ("rms_norm_backend", "fuse_decode_qk_rope_cache", "execution_mode", "attention_backend", "kv_cache_dtype", "num_kvcache_blocks")
         if baseline_config.get(key) != candidate_config.get(key)
     )
 
@@ -84,6 +86,10 @@ def compare_cases(baseline_cases, candidate_cases):
         candidate_mode = candidate[0].get("config", {}).get("execution_mode", "original")
         if baseline_mode != candidate_mode:
             lines.append(f"Execution mode: {baseline_mode} -> {candidate_mode}")
+        for key in ("attention_backend", "kv_cache_dtype", "num_kvcache_blocks"):
+            left, right = baseline[0].get("config", {}).get(key), candidate[0].get("config", {}).get(key)
+            if left != right:
+                lines.append(f"{key}: {left} -> {right}")
         if mismatches:
             lines.append(
                 "Warning: configuration differs for " + ", ".join(mismatches)

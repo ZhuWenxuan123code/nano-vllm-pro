@@ -40,6 +40,14 @@ class BenchmarkHelpersTest(unittest.TestCase):
         self.assertFalse(parse_args([]).fuse_decode_qk_rope_cache)
         self.assertTrue(parse_args(["--fuse-decode-qk-rope-cache"]).fuse_decode_qk_rope_cache)
 
+    def test_attention_quantization_flags(self):
+        args = parse_args([])
+        self.assertEqual((args.attention_backend, args.kv_cache_dtype), ("flash", "auto"))
+        args = parse_args(["--attention-backend", "triton", "--kv-cache-dtype", "int8"])
+        self.assertEqual((args.attention_backend, args.kv_cache_dtype), ("triton", "int8"))
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            parse_args(["--kv-cache-dtype", "int8"])
+
     def test_execution_and_measurement_modes(self):
         args = parse_args([])
         self.assertEqual((args.execution_mode, args.measurement_mode), ("original", "sync"))

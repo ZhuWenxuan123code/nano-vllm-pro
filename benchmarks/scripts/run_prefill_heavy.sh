@@ -12,7 +12,7 @@ runs="${RUNS:-5}"
 run_start="${RUN_START:-1}"
 rms_norm_backend="${RMS_NORM_BACKEND:-compiled}"
 fuse_decode="${FUSE_DECODE_QK_ROPE_CACHE:-0}"
-extra_args=()
+extra_args=(--attention-backend "${ATTENTION_BACKEND:-flash}" --kv-cache-dtype "${KV_CACHE_DTYPE:-auto}")
 if [[ "$fuse_decode" == "1" ]]; then
   extra_args+=(--fuse-decode-qk-rope-cache)
 fi

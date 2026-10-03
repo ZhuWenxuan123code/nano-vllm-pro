@@ -92,6 +92,13 @@ class Qwen3Attention(nn.Module):
                 self.attn.k_cache, self.attn.v_cache,
                 self.q_norm.eps, self.k_norm.eps,
                 num_warps=1 if self.head_dim <= 128 else 4,
+                k_scale=self.attn.k_scale, v_scale=self.attn.v_scale,
+                # Inductor may eliminate the intermediate BF16 RMS cast.
+                # Match that arithmetic for INT8: quantization magnifies even
+                # small cast differences. Leave the original P2 float path intact.
+                round_before_weight=not (
+                    self.attn.k_cache.dtype == torch.int8 and self.q_norm.backend == "compiled" and
+                    not getattr(torch._inductor.config, "emulate_precision_casts", True)),
             )
             o = self.attn.forward_decode_cached(q)
             return self.o_proj(o.flatten(1, -1))

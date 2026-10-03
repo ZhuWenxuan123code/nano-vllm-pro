@@ -1,6 +1,6 @@
 import unittest
 
-from benchmarks.compare import compare_cases, improvement_percent
+from benchmarks.compare import compare_cases, config_mismatches, improvement_percent
 
 
 def report(throughput, ttft):
@@ -19,7 +19,7 @@ class CompareTest(unittest.TestCase):
 
     def test_improvement_accounts_for_metric_direction(self):
         self.assertEqual(improvement_percent(100, 125, True), 25)
-        self.assertEqual(improvement_percent(100, 80, False), 25)
+        self.assertAlmostEqual(improvement_percent(100, 80, False), 20)
 
     def test_compare_uses_medians_and_formats_markdown(self):
         table = compare_cases(
@@ -28,7 +28,7 @@ class CompareTest(unittest.TestCase):
         )
 
         self.assertIn("| E2E tok/s | 120.00 | 180.00 | +50.00% |", table)
-        self.assertIn("| TTFT P50 ms | 12.00 | 8.00 | +50.00% |", table)
+        self.assertIn("| TTFT P50 ms | 12.00 | 8.00 | +33.33% |", table)
 
     def test_compare_warns_on_config_mismatch(self):
         baseline = report(100, 10)
@@ -70,6 +70,24 @@ class CompareTest(unittest.TestCase):
         candidate["config"]["measurement_mode"] = "sync"
         table = compare_cases({"decode": [baseline]}, {"decode": [candidate]})
         self.assertIn("Warning: configuration differs for measurement_mode", table)
+
+    def test_throughput_and_latency_use_baseline_denominator(self):
+        self.assertAlmostEqual(improvement_percent(100, 120, True), 20.)
+        self.assertAlmostEqual(improvement_percent(100, 80, False), 20.)
+        self.assertAlmostEqual(improvement_percent(100, 120, False), -20.)
+
+    def test_zero_values_do_not_divide_by_zero(self):
+        self.assertIsNone(improvement_percent(0, 100, True))
+        self.assertAlmostEqual(improvement_percent(100, 0, False), 100.)
+
+    def test_backend_and_capacity_differences_are_not_workload_mismatches(self):
+        baseline = [{"config": {"attention_backend": "flash", "kv_cache_dtype": "auto",
+                               "num_kvcache_blocks": 703, "seed": 0, "max_num_seqs": 64}}]
+        candidate = [{"config": {"attention_backend": "triton", "kv_cache_dtype": "int8",
+                                "num_kvcache_blocks": 1305, "seed": 0, "max_num_seqs": 64}}]
+        self.assertEqual(config_mismatches(baseline, candidate), [])
+        candidate[0]["config"]["seed"] = 1
+        self.assertEqual(config_mismatches(baseline, candidate), ["seed"])
 
 
 if __name__ == "__main__":

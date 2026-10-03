@@ -36,6 +36,13 @@ class SmallCacheRunner(ModelRunner):
                      "CUDA and NANOVLLM_TEST_MODEL required")
 class RunnerIntegrationTest(unittest.TestCase):
 
+    def setUp(self):
+        torch._dynamo.reset()
+        name = "recompile_limit" if hasattr(torch._dynamo.config, "recompile_limit") else "cache_size_limit"
+        limit = getattr(torch._dynamo.config, name)
+        setattr(torch._dynamo.config, name, 64)
+        self.addCleanup(setattr, torch._dynamo.config, name, limit)
+
     def trajectory(self, mode, eager, fused):
         # Give both modes the same compilation history. Otherwise earlier shape
         # sweeps can exhaust Dynamo's limit and compare compiled vs eager math.

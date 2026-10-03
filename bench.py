@@ -1,4 +1,5 @@
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -22,15 +23,19 @@ def percentile(values, percent):
 
 
 def code_version():
+    root = Path(__file__).resolve().parent
+    digest = hashlib.sha256()
+    for path in sorted([root / "bench.py", *(root / "nanovllm").rglob("*.py")]):
+        digest.update(str(path.relative_to(root)).encode() + b"\0" + path.read_bytes())
+    source_hash = digest.hexdigest()
     try:
-        root = Path(__file__).resolve().parent
         revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True,
                                            stderr=subprocess.DEVNULL).strip()
         dirty = bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=root,
                                             text=True, stderr=subprocess.DEVNULL).strip())
-        return {"revision": revision, "working_tree_dirty": dirty}
+        return {"revision": revision, "working_tree_dirty": dirty, "source_sha256": source_hash}
     except (OSError, subprocess.CalledProcessError):
-        return {"revision": "unknown", "working_tree_dirty": None}
+        return {"revision": "unknown", "working_tree_dirty": None, "source_sha256": source_hash}
 
 
 def parse_args(argv=None):
@@ -73,6 +78,8 @@ def parse_args(argv=None):
     )  # 单个 batch 最多处理多少token
     parser.add_argument("--tensor-parallel-size", type=int, default=1)
     parser.add_argument("--execution-mode", choices=("original", "buffered"), default="original")
+    parser.add_argument("--attention-backend", choices=("flash", "triton"), default="flash")
+    parser.add_argument("--kv-cache-dtype", choices=("auto", "int8"), default="auto")
     parser.add_argument("--measurement-mode", choices=("sync", "runtime"), default="sync",
                         help="sync: synchronize every step; runtime: only at run boundaries.")
     parser.add_argument("--warmup-decode-steps", type=int, default=0,
@@ -98,6 +105,8 @@ def parse_args(argv=None):
         "--output-json", help="Write the benchmark report to this path."
     )
     args = parser.parse_args(argv)
+    if args.kv_cache_dtype == "int8" and args.attention_backend != "triton":
+        parser.error("--kv-cache-dtype int8 requires --attention-backend triton")
 
     if args.input_len is not None:
         args.min_input_len = args.max_input_len = args.input_len
@@ -258,6 +267,8 @@ def main():
         rms_norm_backend=args.rms_norm_backend,
         fuse_decode_qk_rope_cache=args.fuse_decode_qk_rope_cache,
         execution_mode=args.execution_mode,
+        attention_backend=args.attention_backend,
+        kv_cache_dtype=args.kv_cache_dtype,
         max_num_seqs=args.max_num_seqs,
         max_num_batched_tokens=args.max_num_batched_tokens,
         max_model_len=args.max_model_len,
@@ -325,6 +336,8 @@ def main():
             "rms_norm_backend": args.rms_norm_backend,
             "fuse_decode_qk_rope_cache": args.fuse_decode_qk_rope_cache,
             "execution_mode": args.execution_mode,
+            "attention_backend": args.attention_backend,
+            "kv_cache_dtype": args.kv_cache_dtype,
             "measurement_mode": args.measurement_mode,
             "phase_timing": "completed_step_wall_time",
             "warmup_decode_steps": args.warmup_decode_steps,
@@ -341,6 +354,7 @@ def main():
         },
         "metrics": metrics,
         "code": code_version(),
+        "cache_memory": llm.model_runner.cache_memory,
     }
     buffers = llm.model_runner.decode_buffers
     report["input_buffers"] = {"device_bytes": buffers.allocated_bytes if buffers else 0}

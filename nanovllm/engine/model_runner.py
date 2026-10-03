@@ -10,6 +10,9 @@ from nanovllm.engine.decode_buffers import DecodeInputBuffers, graph_batch_sizes
 from nanovllm.models.qwen3 import Qwen3ForCausalLM, Qwen3Attention
 from nanovllm.layers.sampler import Sampler
 from nanovllm.layers.layernorm import RMSNorm
+from nanovllm.layers.attention import Attention
+from nanovllm.layers.paged_attention import AttentionWorkspace
+from nanovllm.layers.kv_quantization import K_QUANT_GROUP_SIZE, INT8_CACHE_FORMAT
 from nanovllm.utils.context import set_context, get_context, reset_context
 from nanovllm.utils.loader import load_model
 from nanovllm.utils.profiling import profile_range
@@ -38,6 +41,8 @@ class ModelRunner:
                 module.set_backend(config.rms_norm_backend)
             elif isinstance(module, Qwen3Attention):
                 module.fuse_decode_qk_rope_cache = config.fuse_decode_qk_rope_cache
+            elif isinstance(module, Attention):
+                module.backend = config.attention_backend
         load_model(self.model, config.model)
         self.sampler = Sampler()
         self.warmup_model()
@@ -118,22 +123,82 @@ class ModelRunner:
     def allocate_kv_cache(self):
         config = self.config
         hf_config = config.hf_config
+        num_kv_heads = hf_config.num_key_value_heads // self.world_size
+        head_dim = getattr(hf_config, "head_dim", hf_config.hidden_size // hf_config.num_attention_heads)
+        self.attention_workspace = None
+        if config.attention_backend == "triton":
+            self.attention_workspace = AttentionWorkspace(config.max_num_seqs,
+                hf_config.num_attention_heads // self.world_size, head_dim, f"cuda:{self.rank}")
         free, total = torch.cuda.mem_get_info()
         used = total - free
         peak = torch.cuda.memory_stats()["allocated_bytes.all.peak"]
         current = torch.cuda.memory_stats()["allocated_bytes.all.current"]
-        num_kv_heads = hf_config.num_key_value_heads // self.world_size
-        head_dim = getattr(hf_config, "head_dim", hf_config.hidden_size // hf_config.num_attention_heads)
-        block_bytes = 2 * hf_config.num_hidden_layers * self.block_size * num_kv_heads * head_dim * hf_config.dtype.itemsize # 一个 Block 保存 block_size 个 token 的 KV Cache
-        config.num_kvcache_blocks = int(total * config.gpu_memory_utilization - used - peak + current) // block_bytes
+        quantized = config.kv_cache_dtype == "int8"
+        dtype = torch.int8 if quantized else hf_config.dtype
+        data_block_bytes = 2 * hf_config.num_hidden_layers * self.block_size * num_kv_heads * head_dim * dtype.itemsize
+        scale_block_bytes = hf_config.num_hidden_layers * self.block_size * num_kv_heads * (head_dim // K_QUANT_GROUP_SIZE + 1) * 4 if quantized else 0
+        block_bytes = data_block_bytes + scale_block_bytes
+        # A block is naturally 256-byte aligned; reserve allocator alignment slack
+        # for data/K scales/V scales. Workspace is already included in `used`.
+        budget = int(total * config.gpu_memory_utilization - used - max(0, peak - current) - 768)
+        config.num_kvcache_blocks = budget // block_bytes
+        if self.world_size > 1:
+            # All ranks must accept the same physical block IDs, even when
+            # their free memory or peak activation reservations differ.
+            capacity = torch.tensor(config.num_kvcache_blocks, dtype=torch.int64,
+                                    device=f"cuda:{self.rank}")
+            dist.all_reduce(capacity, op=dist.ReduceOp.MIN)
+            config.num_kvcache_blocks = int(capacity.item())
         assert config.num_kvcache_blocks > 0
-        self.kv_cache = torch.empty(2, hf_config.num_hidden_layers, config.num_kvcache_blocks, self.block_size, num_kv_heads, head_dim)
+        self.allocate_cache_storage(config.num_kvcache_blocks)
+
+    def allocate_cache_storage(self, num_blocks):
+        """Allocate one fixed format; also used by bounded-cache correctness tests."""
+        config, hf = self.config, self.config.hf_config
+        config.num_kvcache_blocks = num_blocks
+        heads = hf.num_key_value_heads // self.world_size
+        dim = getattr(hf, "head_dim", hf.hidden_size // hf.num_attention_heads)
+        quantized = config.kv_cache_dtype == "int8"
+        if config.attention_backend == "triton" and getattr(self, "attention_workspace", None) is None:
+            self.attention_workspace = AttentionWorkspace(config.max_num_seqs,
+                hf.num_attention_heads // self.world_size, dim, f"cuda:{self.rank}")
+        self.kv_cache = torch.empty(2, hf.num_hidden_layers, num_blocks, self.block_size, heads, dim,
+                                   dtype=torch.int8 if quantized else hf.dtype, device=f"cuda:{self.rank}")
+        scale_shape = (hf.num_hidden_layers, num_blocks, self.block_size, heads)
+        self.k_scales = (torch.empty(*scale_shape, dim // K_QUANT_GROUP_SIZE, dtype=torch.float32,
+                                    device=f"cuda:{self.rank}") if quantized else None)
+        self.v_scales = (torch.empty(scale_shape, dtype=torch.float32,
+                                    device=f"cuda:{self.rank}") if quantized else None)
+        data_bytes = self.kv_cache.numel() * self.kv_cache.element_size()
+        k_scale_bytes = self.k_scales.numel() * 4 if quantized else 0
+        v_scale_bytes = self.v_scales.numel() * 4 if quantized else 0
+        scale_bytes = k_scale_bytes + v_scale_bytes
+        self.cache_memory = {"data_bytes": data_bytes, "scale_bytes": scale_bytes,
+            "k_scale_bytes": k_scale_bytes, "v_scale_bytes": v_scale_bytes,
+            "format": INT8_CACHE_FORMAT if quantized else str(hf.dtype),
+            "k_quant_group_size": K_QUANT_GROUP_SIZE if quantized else None,
+            "workspace_bytes": self.attention_workspace.nbytes if getattr(self, "attention_workspace", None) else 0,
+            "bytes_per_token_per_rank": (data_bytes + scale_bytes) // (num_blocks * self.block_size),
+            "token_slots": num_blocks * self.block_size, "blocks": num_blocks, "allocation_alignment_reserve_bytes": 768}
         layer_id = 0
         for module in self.model.modules():
             if hasattr(module, "k_cache") and hasattr(module, "v_cache"):
                 module.k_cache = self.kv_cache[0, layer_id]
                 module.v_cache = self.kv_cache[1, layer_id]
+                module.k_scale = self.k_scales[layer_id] if quantized else None
+                module.v_scale = self.v_scales[layer_id] if quantized else None
+                module.workspace = getattr(self, "attention_workspace", None)
                 layer_id += 1
+
+    def cache_metadata(self):
+        metadata = {"rank": self.rank, "attention_backend": self.config.attention_backend,
+                    "format": self.cache_memory["format"], "blocks": self.config.num_kvcache_blocks,
+                    "kv_heads": self.kv_cache.shape[-2], "k_quant_group_size": self.cache_memory["k_quant_group_size"]}
+        if self.world_size == 1:
+            return [metadata]
+        ranks = [None] * self.world_size
+        dist.all_gather_object(ranks, metadata)
+        return ranks
 
     def prepare_block_tables(self, seqs: list[Sequence]):
         max_len = max(len(seq.block_table) for seq in seqs)

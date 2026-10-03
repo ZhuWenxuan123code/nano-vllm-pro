@@ -31,7 +31,7 @@ else
 fi
 
 mode="eager"
-extra_args=(--execution-mode "${EXECUTION_MODE:-original}")
+extra_args=(--execution-mode "${EXECUTION_MODE:-original}" --attention-backend "${ATTENTION_BACKEND:-flash}" --kv-cache-dtype "${KV_CACHE_DTYPE:-auto}")
 if [[ "${PROFILE_STAGES:-0}" == "1" ]]; then
   extra_args+=(--profile-stages)
 fi
@@ -49,6 +49,9 @@ if [[ "${EXECUTION_MODE:-original}" != "original" ]]; then
   mode="$mode-${EXECUTION_MODE}"
 fi
 report_base="$output_dir/$phase-$mode"
+if [[ "${ATTENTION_BACKEND:-flash}" != "flash" ]]; then
+  report_base="$report_base-${ATTENTION_BACKEND}-${KV_CACHE_DTYPE:-auto}"
+fi
 
 CUDA_VISIBLE_DEVICES="$device_ids" nsys profile \
   --trace=cuda,nvtx,osrt \

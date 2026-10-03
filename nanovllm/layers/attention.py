@@ -5,6 +5,8 @@ import triton.language as tl
 
 from flash_attn import flash_attn_varlen_func, flash_attn_with_kvcache
 from nanovllm.utils.context import get_context
+from nanovllm.layers.paged_attention import paged_decode_attention, paged_prefill_attention
+from nanovllm.layers.kv_quantization import store_int8_kvcache
 
 
 @triton.jit
@@ -55,13 +57,23 @@ class Attention(nn.Module):
         self.scale = scale
         self.num_kv_heads = num_kv_heads
         self.k_cache = self.v_cache = torch.tensor([])
+        self.k_scale = self.v_scale = None
+        self.backend = "flash"
+        self.workspace = None
 
     def forward(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor):
         context = get_context()
         k_cache, v_cache = self.k_cache, self.v_cache
         if k_cache.numel() and v_cache.numel():
-            store_kvcache(k, v, k_cache, v_cache, context.slot_mapping)
+            if k_cache.dtype == torch.int8:
+                store_int8_kvcache(k, v, k_cache, v_cache, self.k_scale, self.v_scale, context.slot_mapping)
+            else:
+                store_kvcache(k, v, k_cache, v_cache, context.slot_mapping)
         if context.is_prefill:
+            if context.block_tables is not None and k_cache.dtype == torch.int8:
+                return paged_prefill_attention(
+                    q, k_cache, v_cache, context.block_tables, context.cu_seqlens_q,
+                    context.cu_seqlens_k, context.max_seqlen_q, self.scale, self.k_scale, self.v_scale)
             if context.block_tables is not None:    # prefix cache
                 k, v = k_cache, v_cache
             o = flash_attn_varlen_func(q, k, v,
@@ -75,6 +87,10 @@ class Attention(nn.Module):
     def forward_decode_cached(self, q: torch.Tensor):
         """Decode attention when this step's K/V have already been written."""
         context = get_context()
+        if self.backend == "triton":
+            return paged_decode_attention(q, self.k_cache, self.v_cache, context.block_tables,
+                                          context.context_lens, self.scale, self.k_scale,
+                                          self.v_scale, self.workspace)
         return flash_attn_with_kvcache(
             q.unsqueeze(1), self.k_cache, self.v_cache,
             cache_seqlens=context.context_lens, block_table=context.block_tables,

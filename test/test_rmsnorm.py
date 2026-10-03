@@ -18,6 +18,13 @@ class RMSNormTritonTest(unittest.TestCase):
 
     def setUp(self):
         torch.manual_seed(7)
+        # Other model tests populate this shared compiler cache. Keep the
+        # compiled reference from silently falling back to eager in a suite.
+        torch._dynamo.reset()
+        name = "recompile_limit" if hasattr(torch._dynamo.config, "recompile_limit") else "cache_size_limit"
+        limit = getattr(torch._dynamo.config, name)
+        setattr(torch._dynamo.config, name, 64)
+        self.addCleanup(setattr, torch._dynamo.config, name, limit)
 
     def _check(self, x, residual):
         norm = RMSNorm(x.shape[-1], eps=1e-6).to(device=x.device, dtype=x.dtype)

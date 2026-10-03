@@ -27,6 +27,8 @@ def parse_args(argv=None):
     parser.add_argument("--max-num-batched-tokens", type=int, default=16384)
     parser.add_argument("--tensor-parallel-size", type=int, default=1)
     parser.add_argument("--execution-mode", choices=("original", "buffered"), default="original")
+    parser.add_argument("--attention-backend", choices=("flash", "triton"), default="flash")
+    parser.add_argument("--kv-cache-dtype", choices=("auto", "int8"), default="auto")
     parser.add_argument("--profile-stages", action="store_true")
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.9)
     parser.add_argument("--enforce-eager", action="store_true")
@@ -38,6 +40,8 @@ def parse_args(argv=None):
         default=Path("benchmarks/profiles/baseline"),
     )
     args = parser.parse_args(argv)
+    if args.kv_cache_dtype == "int8" and args.attention_backend != "triton":
+        parser.error("INT8 KV cache requires --attention-backend triton")
 
     positive = {
         "batch-size": args.batch_size,
@@ -272,6 +276,8 @@ def report_config(args):
         "max_num_batched_tokens": args.max_num_batched_tokens,
         "tensor_parallel_size": args.tensor_parallel_size,
         "execution_mode": args.execution_mode,
+        "attention_backend": args.attention_backend,
+        "kv_cache_dtype": args.kv_cache_dtype,
         "profile_stages": args.profile_stages,
         "gpu_memory_utilization": args.gpu_memory_utilization,
         "enforce_eager": args.enforce_eager,
@@ -288,6 +294,8 @@ def output_prefix(args):
     execution_mode = getattr(args, "execution_mode", "original")
     if execution_mode != "original":
         suffix += f"-{execution_mode}"
+    if getattr(args, "attention_backend", "flash") != "flash":
+        suffix += f"-{args.attention_backend}-{args.kv_cache_dtype}"
     return args.output_dir / f"{args.phase}-{mode}{suffix}"
 
 
@@ -357,6 +365,8 @@ def main():
         fuse_decode_qk_rope_cache=args.fuse_decode_qk_rope_cache,
         tensor_parallel_size=args.tensor_parallel_size,
         execution_mode=args.execution_mode,
+        attention_backend=args.attention_backend,
+        kv_cache_dtype=args.kv_cache_dtype,
         profile_stages=args.profile_stages,
         max_num_seqs=args.batch_size,
         max_num_batched_tokens=args.max_num_batched_tokens,
@@ -382,6 +392,7 @@ def main():
         "h2d_bytes": buffers.copied_bytes - before_bytes if buffers else None,
         "note": "Decode persistent inputs only; use the trace for original and total allocations/copies.",
     }
+    report["cache_memory"] = llm.model_runner.cache_memory
     report_path = prefix.with_suffix(".summary.json" if args.backend == "torch" else ".run.json")
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     capture = report["capture"]

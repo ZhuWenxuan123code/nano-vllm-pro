@@ -27,6 +27,8 @@ else
 fi
 
 args=(
+  --attention-backend "${ATTENTION_BACKEND:-flash}"
+  --kv-cache-dtype "${KV_CACHE_DTYPE:-auto}"
   --execution-mode "${EXECUTION_MODE:-original}"
   --backend torch
   --phase "$phase"

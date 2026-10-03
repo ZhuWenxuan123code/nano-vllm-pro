@@ -50,6 +50,13 @@ class ProfileHelpersTest(unittest.TestCase):
         self.assertTrue(args.profile_stages)
         self.assertEqual(output_prefix(args), Path("profiles/decode-cudagraph-buffered"))
 
+    def test_p4_separate_output_and_invalid_configuration(self):
+        args = parse_args(["--phase", "decode", "--attention-backend", "triton",
+                           "--kv-cache-dtype", "int8", "--output-dir", "profiles"])
+        self.assertEqual(output_prefix(args), Path("profiles/decode-cudagraph-triton-int8"))
+        with redirect_stderr(StringIO()), self.assertRaises(SystemExit):
+            parse_args(["--phase", "decode", "--kv-cache-dtype", "int8"])
+
     def test_profiler_summary_excludes_annotations_and_memcpy(self):
         events = [
             SimpleNamespace(
