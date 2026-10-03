@@ -10,6 +10,7 @@ from nanovllm.sampling_params import SamplingParams
 from nanovllm.engine.sequence import Sequence
 from nanovllm.engine.scheduler import Scheduler
 from nanovllm.engine.model_runner import ModelRunner
+from nanovllm.utils.profiling import profile_range
 
 
 @dataclass(slots=True)
@@ -27,6 +28,7 @@ class LLMEngine:
         config_fields = {field.name for field in fields(Config)}
         config_kwargs = {k: v for k, v in kwargs.items() if k in config_fields}
         config = Config(model, **config_kwargs)
+        self.profile_stages = config.profile_stages
         Sequence.block_size = config.kvcache_block_size
         # 创建 spawn 多进程上下文
         self.ps = []
@@ -58,10 +60,12 @@ class LLMEngine:
         return seq.seq_id
 
     def step_with_info(self) -> tuple[list[tuple[int, list[int]]], StepInfo]:
-        seqs, is_prefill = self.scheduler.schedule()
+        with profile_range("nanovllm::schedule", self.profile_stages):
+            seqs, is_prefill = self.scheduler.schedule()
         num_scheduled_tokens = sum(seq.num_scheduled_tokens for seq in seqs) if is_prefill else len(seqs)
         token_ids = self.model_runner.call("run", seqs, is_prefill)
-        generated_seq_ids = self.scheduler.postprocess(seqs, token_ids, is_prefill)
+        with profile_range("nanovllm::postprocess", self.profile_stages):
+            generated_seq_ids = self.scheduler.postprocess(seqs, token_ids, is_prefill)
         outputs = [(seq.seq_id, seq.completion_token_ids) for seq in seqs if seq.is_finished]
         info = StepInfo(
             is_prefill=is_prefill,

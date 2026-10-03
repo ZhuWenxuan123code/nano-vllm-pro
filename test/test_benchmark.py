@@ -40,12 +40,22 @@ class BenchmarkHelpersTest(unittest.TestCase):
         self.assertFalse(parse_args([]).fuse_decode_qk_rope_cache)
         self.assertTrue(parse_args(["--fuse-decode-qk-rope-cache"]).fuse_decode_qk_rope_cache)
 
+    def test_execution_and_measurement_modes(self):
+        args = parse_args([])
+        self.assertEqual((args.execution_mode, args.measurement_mode), ("original", "sync"))
+        args = parse_args(["--execution-mode", "buffered", "--measurement-mode", "runtime"])
+        self.assertEqual((args.execution_mode, args.measurement_mode), ("buffered", "runtime"))
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            parse_args(["--execution-mode", "async"])
+
     def test_single_token_output_has_no_decode_metrics(self):
         class FakeCuda:
 
+            sync_calls = 0
+
             @staticmethod
             def synchronize():
-                pass
+                FakeCuda.sync_calls += 1
 
             @staticmethod
             def reset_peak_memory_stats():
@@ -88,6 +98,11 @@ class BenchmarkHelpersTest(unittest.TestCase):
         self.assertIsNone(metrics["decode_throughput"])
         self.assertIsNone(metrics["tpot_ms"]["p50"])
         self.assertEqual(metrics["peak_memory_mb"], 1.0)
+        self.assertEqual(FakeCuda.sync_calls, 3)
+        FakeCuda.sync_calls = 0
+        runtime_metrics = run_benchmark(FakeLLM(), [[1, 2], [3, 4]], params, torch, "runtime")
+        self.assertEqual(FakeCuda.sync_calls, 2)
+        self.assertEqual(runtime_metrics["total_output_tokens"], 2)
 
 
 if __name__ == "__main__":

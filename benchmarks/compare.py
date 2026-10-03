@@ -43,7 +43,7 @@ def config_mismatches(baseline, candidate):
     return sorted(
         key
         for key in keys
-        if key not in ("rms_norm_backend", "fuse_decode_qk_rope_cache")
+        if key not in ("rms_norm_backend", "fuse_decode_qk_rope_cache", "execution_mode")
         if baseline_config.get(key) != candidate_config.get(key)
     )
 
@@ -80,6 +80,10 @@ def compare_cases(baseline_cases, candidate_cases):
         candidate_fused = candidate[0].get("config", {}).get("fuse_decode_qk_rope_cache", False)
         if baseline_fused != candidate_fused:
             lines.append(f"Decode QKV fusion: {baseline_fused} -> {candidate_fused}")
+        baseline_mode = baseline[0].get("config", {}).get("execution_mode", "original")
+        candidate_mode = candidate[0].get("config", {}).get("execution_mode", "original")
+        if baseline_mode != candidate_mode:
+            lines.append(f"Execution mode: {baseline_mode} -> {candidate_mode}")
         if mismatches:
             lines.append(
                 "Warning: configuration differs for " + ", ".join(mismatches)

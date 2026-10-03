@@ -31,7 +31,10 @@ else
 fi
 
 mode="eager"
-extra_args=()
+extra_args=(--execution-mode "${EXECUTION_MODE:-original}")
+if [[ "${PROFILE_STAGES:-0}" == "1" ]]; then
+  extra_args+=(--profile-stages)
+fi
 if [[ "$eager" == "1" ]]; then
   extra_args+=(--enforce-eager)
 elif [[ "$phase" == "decode" ]]; then
@@ -42,6 +45,9 @@ if [[ "${FUSE_DECODE_QK_ROPE_CACHE:-0}" == "1" ]]; then
   mode="$mode-fused-qkv"
 fi
 mkdir -p "$output_dir"
+if [[ "${EXECUTION_MODE:-original}" != "original" ]]; then
+  mode="$mode-${EXECUTION_MODE}"
+fi
 report_base="$output_dir/$phase-$mode"
 
 CUDA_VISIBLE_DEVICES="$device_ids" nsys profile \

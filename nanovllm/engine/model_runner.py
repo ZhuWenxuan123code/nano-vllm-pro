@@ -6,11 +6,13 @@ from multiprocessing.shared_memory import SharedMemory
 
 from nanovllm.config import Config
 from nanovllm.engine.sequence import Sequence
+from nanovllm.engine.decode_buffers import DecodeInputBuffers, graph_batch_sizes
 from nanovllm.models.qwen3 import Qwen3ForCausalLM, Qwen3Attention
 from nanovllm.layers.sampler import Sampler
 from nanovllm.layers.layernorm import RMSNorm
 from nanovllm.utils.context import set_context, get_context, reset_context
 from nanovllm.utils.loader import load_model
+from nanovllm.utils.profiling import profile_range
 
 
 class ModelRunner:
@@ -23,6 +25,7 @@ class ModelRunner:
         self.world_size = config.tensor_parallel_size
         self.rank = rank
         self.event = event
+        self.decode_buffers = None
 
         dist.init_process_group("nccl", "tcp://localhost:2333", world_size=self.world_size, rank=rank)
         torch.cuda.set_device(rank)
@@ -38,6 +41,11 @@ class ModelRunner:
         load_model(self.model, config.model)
         self.sampler = Sampler()
         self.warmup_model()
+        if config.execution_mode == "buffered":
+            self.decode_buffers = DecodeInputBuffers(
+                config.max_num_seqs, config.max_model_len, self.block_size,
+                device=f"cuda:{rank}", sample=rank == 0,
+            )
         self.allocate_kv_cache()
         if not self.enforce_eager:
             self.capture_cudagraph()
@@ -54,6 +62,7 @@ class ModelRunner:
                 self.loop()
 
     def exit(self):
+        torch.cuda.synchronize()
         if self.world_size > 1:
             self.shm.close()
             dist.barrier()
@@ -176,6 +185,20 @@ class ModelRunner:
         return input_ids, positions
 
     def prepare_decode(self, seqs: list[Sequence]):
+        if self.decode_buffers is not None:
+            buffers = self.decode_buffers
+            with profile_range("nanovllm::host_buffer_wait", self.config.profile_stages):
+                buffers.wait_for_host()
+            with profile_range("nanovllm::decode_metadata", self.config.profile_stages):
+                buffers.fill(seqs)
+            with profile_range("nanovllm::h2d", self.config.profile_stages):
+                buffers.upload()
+            bs = len(seqs)
+            inputs = buffers.inputs
+            set_context(False, slot_mapping=inputs["slot_mapping"][:bs],
+                        context_lens=inputs["context_lens"][:bs],
+                        block_tables=inputs["block_tables"][:bs])
+            return inputs["input_ids"][:bs], inputs["positions"][:bs]
         input_ids = []
         positions = []
         slot_mapping = []
@@ -207,23 +230,37 @@ class ModelRunner:
             context = get_context()
             graph = self.graphs[next(x for x in self.graph_bs if x >= bs)]
             graph_vars = self.graph_vars
-            graph_vars["input_ids"][:bs] = input_ids
-            graph_vars["positions"][:bs] = positions
-            graph_vars["slot_mapping"].fill_(-1)
-            graph_vars["slot_mapping"][:bs] = context.slot_mapping
-            graph_vars["context_lens"].zero_()
-            graph_vars["context_lens"][:bs] = context.context_lens
-            graph_vars["block_tables"][:bs, :context.block_tables.size(1)] = context.block_tables
+            if self.decode_buffers is None:
+                graph_vars["input_ids"][:bs] = input_ids
+                graph_vars["positions"][:bs] = positions
+                graph_vars["slot_mapping"].fill_(-1)
+                graph_vars["slot_mapping"][:bs] = context.slot_mapping
+                graph_vars["context_lens"].zero_()
+                graph_vars["context_lens"][:bs] = context.context_lens
+                graph_vars["block_tables"][:bs, :context.block_tables.size(1)] = context.block_tables
             graph.replay()
             return self.model.compute_logits(graph_vars["outputs"][:bs])
 
     def run(self, seqs: list[Sequence], is_prefill: bool) -> list[int]:
-        input_ids, positions = self.prepare_prefill(seqs) if is_prefill else self.prepare_decode(seqs)
-        temperatures = self.prepare_sample(seqs) if self.rank == 0 else None
-        logits = self.run_model(input_ids, positions, is_prefill)
-        token_ids = self.sampler(logits, temperatures).tolist() if self.rank == 0 else None
-        reset_context()
-        return token_ids
+        enabled = self.config.profile_stages
+        try:
+            with profile_range("nanovllm::prepare_inputs", enabled):
+                input_ids, positions = self.prepare_prefill(seqs) if is_prefill else self.prepare_decode(seqs)
+                temperatures = None
+                if self.rank == 0:
+                    temperatures = (self.decode_buffers.temperatures(len(seqs))
+                                    if not is_prefill and self.decode_buffers is not None
+                                    else self.prepare_sample(seqs))
+            with profile_range("nanovllm::model", enabled):
+                logits = self.run_model(input_ids, positions, is_prefill)
+            if self.rank != 0:
+                return None
+            with profile_range("nanovllm::sample", enabled):
+                token_ids = self.sampler(logits, temperatures)
+            with profile_range("nanovllm::d2h", enabled):
+                return token_ids.tolist()
+        finally:
+            reset_context()
 
     @torch.inference_mode()
     def capture_cudagraph(self): # for decode
@@ -231,13 +268,22 @@ class ModelRunner:
         hf_config = config.hf_config
         max_bs = min(self.config.max_num_seqs, 512)
         max_num_blocks = (config.max_model_len + self.block_size - 1) // self.block_size
-        input_ids = torch.zeros(max_bs, dtype=torch.int64)
-        positions = torch.zeros(max_bs, dtype=torch.int64)
-        slot_mapping = torch.zeros(max_bs, dtype=torch.int32)
-        context_lens = torch.zeros(max_bs, dtype=torch.int32)
-        block_tables = torch.zeros(max_bs, max_num_blocks, dtype=torch.int32)
+        if self.decode_buffers is None:
+            input_ids = torch.zeros(max_bs, dtype=torch.int64)
+            positions = torch.zeros(max_bs, dtype=torch.int64)
+            slot_mapping = torch.zeros(max_bs, dtype=torch.int32)
+            context_lens = torch.zeros(max_bs, dtype=torch.int32)
+            block_tables = torch.zeros(max_bs, max_num_blocks, dtype=torch.int32)
+        else:
+            inputs = self.decode_buffers.inputs
+            input_ids, positions = inputs["input_ids"], inputs["positions"]
+            slot_mapping, context_lens = inputs["slot_mapping"], inputs["context_lens"]
+            block_tables = inputs["block_tables"]
+            # Valid dummy cache addresses during capture; first upload replaces them.
+            slot_mapping.zero_()
+            block_tables.zero_()
         outputs = torch.zeros(max_bs, hf_config.hidden_size)
-        self.graph_bs = [1, 2, 4, 8] + list(range(16, max_bs + 1, 16))
+        self.graph_bs = graph_batch_sizes(max_bs)
         self.graphs = {}
         self.graph_pool = None
 
@@ -262,3 +308,6 @@ class ModelRunner:
             block_tables=block_tables,
             outputs=outputs,
         )
+        if self.decode_buffers is not None:
+            block_tables.fill_(-1)
+            slot_mapping.fill_(-1)

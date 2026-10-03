@@ -103,3 +103,18 @@ bash benchmarks/scripts/profile_torch.sh decode
 走 Eager 路径。Torch 的 `*.summary.json` 提供 CUDA 时间占比、kernel activity 和
 launch API 次数；Nsight 的 `*.nsys.csv` 提供更权威的 kernel/API 汇总。Profiler
 会引入额外开销，只用于热点归因；端到端性能仍以 `bench.py` 为准。
+
+## P3 输入缓冲对照
+
+`EXECUTION_MODE=buffered` 启用持久化 Decode 输入；默认 `original`。
+`MEASUREMENT_MODE=runtime` 仅在 benchmark 整轮边界显式同步。
+
+```bash
+CUDA_VISIBLE_DEVICES=1 bash benchmarks/scripts/run_p3_runner.sh
+CUDA_VISIBLE_DEVICES=1 bash benchmarks/scripts/profile_p3_runner.sh
+```
+
+前者交替执行两种模式，保存 P2 关闭的三组负载以及 P2 开启的两组叠加对照。
+后者生成三次 CUDA Graph node 时间线和 `gate.json`，用于决定是否进入异步阶段。
+两者都需要空闲 GPU；性能测试不带 profiler。具体状态和计时定义见
+[P3 文档](../docs/优化/P3-输入缓冲与异步执行.md)。

@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import subprocess
 from pathlib import Path
 from time import perf_counter
 from random import randint, seed
@@ -18,6 +19,18 @@ def percentile(values, percent):
     upper = min(lower + 1, len(values) - 1)
     weight = position - lower
     return values[lower] * (1 - weight) + values[upper] * weight
+
+
+def code_version():
+    try:
+        root = Path(__file__).resolve().parent
+        revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True,
+                                           stderr=subprocess.DEVNULL).strip()
+        dirty = bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=root,
+                                            text=True, stderr=subprocess.DEVNULL).strip())
+        return {"revision": revision, "working_tree_dirty": dirty}
+    except (OSError, subprocess.CalledProcessError):
+        return {"revision": "unknown", "working_tree_dirty": None}
 
 
 def parse_args(argv=None):
@@ -59,6 +72,11 @@ def parse_args(argv=None):
         "--max-num-batched-tokens", type=int, default=16384
     )  # 单个 batch 最多处理多少token
     parser.add_argument("--tensor-parallel-size", type=int, default=1)
+    parser.add_argument("--execution-mode", choices=("original", "buffered"), default="original")
+    parser.add_argument("--measurement-mode", choices=("sync", "runtime"), default="sync",
+                        help="sync: synchronize every step; runtime: only at run boundaries.")
+    parser.add_argument("--warmup-decode-steps", type=int, default=0,
+                        help="Representative warmup with max-num-seqs prompts; 0 keeps legacy warmup.")
     parser.add_argument(
         "--rms-norm-backend", choices=("compiled", "triton"), default="compiled",
         help="RMSNorm implementation used by every model runner.",
@@ -112,6 +130,10 @@ def parse_args(argv=None):
         parser.error("--temperature must be greater than 1e-10")
     if args.warmup_runs < 0:
         parser.error("--warmup-runs cannot be negative")
+    if args.warmup_decode_steps < 0:
+        parser.error("--warmup-decode-steps cannot be negative")
+    if args.warmup_decode_steps and args.max_input_len + args.warmup_decode_steps + 1 > args.max_model_len:
+        parser.error("representative warmup exceeds --max-model-len")
     return args
 
 
@@ -142,7 +164,9 @@ def print_report(report):
     print(f"Peak allocated memory (rank 0): {metrics['peak_memory_mb']:.2f} MiB")
 
 
-def run_benchmark(llm: LLM, prompts, sampling_params, torch):
+def run_benchmark(llm: LLM, prompts, sampling_params, torch, measurement_mode="sync"):
+    if measurement_mode not in ("sync", "runtime"):
+        raise ValueError(f"unsupported measurement mode: {measurement_mode}")
     seq_ids = [
         llm.add_request(prompt, params)
         for prompt, params in zip(prompts, sampling_params)
@@ -163,7 +187,8 @@ def run_benchmark(llm: LLM, prompts, sampling_params, torch):
     while not llm.is_finished():
         step_start = perf_counter()
         _, info = llm.step_with_info()
-        torch.cuda.synchronize()
+        if measurement_mode == "sync":
+            torch.cuda.synchronize()
         step_end = perf_counter()
         step_elapsed = step_end - step_start
 
@@ -180,6 +205,7 @@ def run_benchmark(llm: LLM, prompts, sampling_params, torch):
             first_token_times.setdefault(seq_id, step_end) # 第一个 token 生成完成的时间
         for seq_id in info.finished_seq_ids:
             finish_times[seq_id] = step_end
+    torch.cuda.synchronize()
     benchmark_end = perf_counter()
 
     ttft = [first_token_times[seq_id] - benchmark_start for seq_id in seq_ids]
@@ -231,6 +257,7 @@ def main():
         tensor_parallel_size=args.tensor_parallel_size,
         rms_norm_backend=args.rms_norm_backend,
         fuse_decode_qk_rope_cache=args.fuse_decode_qk_rope_cache,
+        execution_mode=args.execution_mode,
         max_num_seqs=args.max_num_seqs,
         max_num_batched_tokens=args.max_num_batched_tokens,
         max_model_len=args.max_model_len,
@@ -257,6 +284,19 @@ def main():
     # prompt_token_ids = [dict(prompt_token_ids=p) for p in prompt_token_ids]
 
     for index in range(args.warmup_runs):
+        if args.warmup_decode_steps:
+            warmup_prompts = [prompt_token_ids[i % len(prompt_token_ids)]
+                              for i in range(args.max_num_seqs)]
+            llm.generate(warmup_prompts, SamplingParams(
+                temperature=args.temperature, ignore_eos=True,
+                max_tokens=args.warmup_decode_steps + 1,
+            ), use_tqdm=False)
+            # Do not give the measured requests a warm prefix-cache hit.
+            blocks = llm.scheduler.block_manager
+            blocks.hash_to_block_id.clear()
+            for block in blocks.blocks:
+                block.hash = -1
+            continue
         llm.generate(
             [f"Benchmark warmup {index}: "],
             SamplingParams(
@@ -267,7 +307,9 @@ def main():
             use_tqdm=False,
         )
 
-    metrics = run_benchmark(llm, prompt_token_ids, sampling_params, torch)
+    # All modes start sampling from the same RNG state after warmup.
+    torch.manual_seed(args.seed)
+    metrics = run_benchmark(llm, prompt_token_ids, sampling_params, torch, args.measurement_mode)
     report = {
         "config": {
             "model": path,
@@ -282,15 +324,26 @@ def main():
             "tensor_parallel_size": args.tensor_parallel_size,
             "rms_norm_backend": args.rms_norm_backend,
             "fuse_decode_qk_rope_cache": args.fuse_decode_qk_rope_cache,
+            "execution_mode": args.execution_mode,
+            "measurement_mode": args.measurement_mode,
+            "phase_timing": "completed_step_wall_time",
+            "warmup_decode_steps": args.warmup_decode_steps,
             "gpu_memory_utilization": args.gpu_memory_utilization,
             "enforce_eager": args.enforce_eager,
             "temperature": args.temperature,
             "seed": args.seed,
             "warmup_runs": args.warmup_runs,
             "gpu": torch.cuda.get_device_name(),
+            "gpu_uuid": str(getattr(torch.cuda.get_device_properties(0), "uuid", "unknown")),
+            "torch_version": torch.__version__,
+            "cuda_version": torch.version.cuda,
+            "num_kvcache_blocks": llm.model_runner.config.num_kvcache_blocks,
         },
         "metrics": metrics,
+        "code": code_version(),
     }
+    buffers = llm.model_runner.decode_buffers
+    report["input_buffers"] = {"device_bytes": buffers.allocated_bytes if buffers else 0}
     print_report(report)
 
     # 将结果保存到json

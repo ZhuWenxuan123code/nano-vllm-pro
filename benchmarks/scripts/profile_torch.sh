@@ -27,6 +27,7 @@ else
 fi
 
 args=(
+  --execution-mode "${EXECUTION_MODE:-original}"
   --backend torch
   --phase "$phase"
   --model "$model_path"
@@ -41,6 +42,9 @@ args=(
   --seed "${SEED:-0}"
   --output-dir "$output_dir"
 )
+if [[ "${PROFILE_STAGES:-0}" == "1" ]]; then
+  args+=(--profile-stages)
+fi
 if [[ "$eager" == "1" ]]; then
   args+=(--enforce-eager)
 fi

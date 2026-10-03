@@ -60,6 +60,17 @@ class CompareTest(unittest.TestCase):
         self.assertIn("Decode QKV fusion: False -> True", table)
         self.assertNotIn("Warning: configuration differs", table)
 
+    def test_runner_mode_is_allowed_but_timing_mismatch_is_warned(self):
+        baseline, candidate = report(100, 10), report(105, 9)
+        baseline["config"] = {"execution_mode": "original", "measurement_mode": "runtime"}
+        candidate["config"] = {"execution_mode": "buffered", "measurement_mode": "runtime"}
+        table = compare_cases({"decode": [baseline]}, {"decode": [candidate]})
+        self.assertIn("Execution mode: original -> buffered", table)
+        self.assertNotIn("Warning: configuration differs", table)
+        candidate["config"]["measurement_mode"] = "sync"
+        table = compare_cases({"decode": [baseline]}, {"decode": [candidate]})
+        self.assertIn("Warning: configuration differs for measurement_mode", table)
+
 
 if __name__ == "__main__":
     unittest.main()

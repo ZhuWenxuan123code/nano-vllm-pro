@@ -44,6 +44,12 @@ class ProfileHelpersTest(unittest.TestCase):
                            "--output-dir", "profiles"])
         self.assertEqual(output_prefix(args), Path("profiles/decode-cudagraph-fused-qkv"))
 
+    def test_buffered_profile_has_separate_output(self):
+        args = parse_args(["--phase", "decode", "--execution-mode", "buffered",
+                           "--profile-stages", "--output-dir", "profiles"])
+        self.assertTrue(args.profile_stages)
+        self.assertEqual(output_prefix(args), Path("profiles/decode-cudagraph-buffered"))
+
     def test_profiler_summary_excludes_annotations_and_memcpy(self):
         events = [
             SimpleNamespace(

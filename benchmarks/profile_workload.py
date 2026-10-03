@@ -26,6 +26,8 @@ def parse_args(argv=None):
     parser.add_argument("--max-model-len", type=int, default=4096)
     parser.add_argument("--max-num-batched-tokens", type=int, default=16384)
     parser.add_argument("--tensor-parallel-size", type=int, default=1)
+    parser.add_argument("--execution-mode", choices=("original", "buffered"), default="original")
+    parser.add_argument("--profile-stages", action="store_true")
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.9)
     parser.add_argument("--enforce-eager", action="store_true")
     parser.add_argument("--fuse-decode-qk-rope-cache", action="store_true")
@@ -269,17 +271,23 @@ def report_config(args):
         "max_model_len": args.max_model_len,
         "max_num_batched_tokens": args.max_num_batched_tokens,
         "tensor_parallel_size": args.tensor_parallel_size,
+        "execution_mode": args.execution_mode,
+        "profile_stages": args.profile_stages,
         "gpu_memory_utilization": args.gpu_memory_utilization,
         "enforce_eager": args.enforce_eager,
         "fuse_decode_qk_rope_cache": args.fuse_decode_qk_rope_cache,
         "seed": args.seed,
         "gpu": torch.cuda.get_device_name(),
+        "gpu_uuid": str(getattr(torch.cuda.get_device_properties(0), "uuid", "unknown")),
     }
 
 
 def output_prefix(args):
     mode = "eager" if args.phase == "prefill" or args.enforce_eager else "cudagraph"
     suffix = "-fused-qkv" if getattr(args, "fuse_decode_qk_rope_cache", False) else ""
+    execution_mode = getattr(args, "execution_mode", "original")
+    if execution_mode != "original":
+        suffix += f"-{execution_mode}"
     return args.output_dir / f"{args.phase}-{mode}{suffix}"
 
 
@@ -348,6 +356,8 @@ def main():
         enforce_eager=args.enforce_eager,
         fuse_decode_qk_rope_cache=args.fuse_decode_qk_rope_cache,
         tensor_parallel_size=args.tensor_parallel_size,
+        execution_mode=args.execution_mode,
+        profile_stages=args.profile_stages,
         max_num_seqs=args.batch_size,
         max_num_batched_tokens=args.max_num_batched_tokens,
         max_model_len=args.max_model_len,
@@ -356,12 +366,24 @@ def main():
     vocab_size = llm.tokenizer.vocab_size
     run_warmup(llm, args, vocab_size)
     prepare_capture(llm, args, vocab_size)
+    buffers = llm.model_runner.decode_buffers
+    before_copies = buffers.copies if buffers else 0
+    before_bytes = buffers.copied_bytes if buffers else 0
 
     if args.backend == "torch":
         prefix, report = run_torch_profile(llm, args)
     else:
         prefix, report = run_nsys_capture(llm, args)
 
+    report["input_buffers"] = {
+        "device_bytes": buffers.allocated_bytes if buffers else 0,
+        "host_bytes": buffers.allocated_bytes if buffers else 0,
+        "h2d_calls": buffers.copies - before_copies if buffers else None,
+        "h2d_bytes": buffers.copied_bytes - before_bytes if buffers else None,
+        "note": "Decode persistent inputs only; use the trace for original and total allocations/copies.",
+    }
+    report_path = prefix.with_suffix(".summary.json" if args.backend == "torch" else ".run.json")
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     capture = report["capture"]
     print(f"Profile: {args.phase} ({args.backend})")
     print(f"Steps: {capture['steps']}")

@@ -14,12 +14,16 @@ class Config:
     enforce_eager: bool = False
     rms_norm_backend: str = "compiled"
     fuse_decode_qk_rope_cache: bool = False
+    execution_mode: str = "original"
+    profile_stages: bool = False
     hf_config: AutoConfig | None = None
     eos: int = -1
     kvcache_block_size: int = 256
     num_kvcache_blocks: int = -1
 
     def __post_init__(self):
+        if self.execution_mode not in ("original", "buffered"):
+            raise ValueError(f"unsupported execution mode: {self.execution_mode}")
         assert os.path.isdir(self.model)
         assert self.kvcache_block_size % 256 == 0
         assert 1 <= self.tensor_parallel_size <= 8
