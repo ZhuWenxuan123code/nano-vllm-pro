@@ -9,6 +9,8 @@ from nanovllm.layers.layernorm import RMSNorm
 from nanovllm.layers.linear import QKVParallelLinear, MergedColumnParallelLinear, RowParallelLinear
 from nanovllm.layers.rotary_embedding import get_rope
 from nanovllm.layers.embed_head import VocabParallelEmbedding, ParallelLMHead
+from nanovllm.layers.decode_qkv_fused import decode_qkv_fused
+from nanovllm.utils.context import get_context
 
 
 class Qwen3Attention(nn.Module):
@@ -38,6 +40,7 @@ class Qwen3Attention(nn.Module):
         self.kv_size = self.num_kv_heads * self.head_dim
         self.scaling = self.head_dim ** -0.5
         self.qkv_bias = qkv_bias
+        self.fuse_decode_qk_rope_cache = False
 
         self.qkv_proj = QKVParallelLinear(
             hidden_size,
@@ -75,6 +78,23 @@ class Qwen3Attention(nn.Module):
         hidden_states: torch.Tensor,
     ) -> torch.Tensor:
         qkv = self.qkv_proj(hidden_states)
+        context = get_context()
+        if (self.fuse_decode_qk_rope_cache and not context.is_prefill and
+                not self.qkv_bias and self.head_dim in (64, 128, 256) and
+                qkv.dtype in (torch.float16, torch.bfloat16) and
+                self.q_norm.weight.dtype == qkv.dtype and
+                self.k_norm.weight.dtype == qkv.dtype and
+                self.rotary_emb.cos_sin_cache.dtype == torch.float32 and
+                self.attn.k_cache.numel()):
+            q = decode_qkv_fused(
+                qkv, self.q_norm.weight, self.k_norm.weight,
+                self.rotary_emb.cos_sin_cache, positions, context.slot_mapping,
+                self.attn.k_cache, self.attn.v_cache,
+                self.q_norm.eps, self.k_norm.eps,
+                num_warps=1 if self.head_dim <= 128 else 4,
+            )
+            o = self.attn.forward_decode_cached(q)
+            return self.o_proj(o.flatten(1, -1))
         q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
         q = q.view(-1, self.num_heads, self.head_dim)
         k = k.view(-1, self.num_kv_heads, self.head_dim)

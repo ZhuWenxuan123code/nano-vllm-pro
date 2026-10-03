@@ -44,5 +44,8 @@ args=(
 if [[ "$eager" == "1" ]]; then
   args+=(--enforce-eager)
 fi
+if [[ "${FUSE_DECODE_QK_ROPE_CACHE:-0}" == "1" ]]; then
+  args+=(--fuse-decode-qk-rope-cache)
+fi
 
 CUDA_VISIBLE_DEVICES="$device_ids" "$python_bin" benchmarks/profile_workload.py "${args[@]}"

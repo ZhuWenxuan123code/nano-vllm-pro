@@ -69,7 +69,14 @@ class Attention(nn.Module):
                                        max_seqlen_k=context.max_seqlen_k, cu_seqlens_k=context.cu_seqlens_k,
                                        softmax_scale=self.scale, causal=True, block_table=context.block_tables)
         else:    # decode
-            o = flash_attn_with_kvcache(q.unsqueeze(1), k_cache, v_cache,
-                                        cache_seqlens=context.context_lens, block_table=context.block_tables, 
-                                        softmax_scale=self.scale, causal=True)
+            o = self.forward_decode_cached(q)
         return o
+
+    def forward_decode_cached(self, q: torch.Tensor):
+        """Decode attention when this step's K/V have already been written."""
+        context = get_context()
+        return flash_attn_with_kvcache(
+            q.unsqueeze(1), self.k_cache, self.v_cache,
+            cache_seqlens=context.context_lens, block_table=context.block_tables,
+            softmax_scale=self.scale, causal=True,
+        )

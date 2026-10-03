@@ -28,6 +28,7 @@ def parse_args(argv=None):
     parser.add_argument("--tensor-parallel-size", type=int, default=1)
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.9)
     parser.add_argument("--enforce-eager", action="store_true")
+    parser.add_argument("--fuse-decode-qk-rope-cache", action="store_true")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
         "--output-dir",
@@ -270,6 +271,7 @@ def report_config(args):
         "tensor_parallel_size": args.tensor_parallel_size,
         "gpu_memory_utilization": args.gpu_memory_utilization,
         "enforce_eager": args.enforce_eager,
+        "fuse_decode_qk_rope_cache": args.fuse_decode_qk_rope_cache,
         "seed": args.seed,
         "gpu": torch.cuda.get_device_name(),
     }
@@ -277,7 +279,8 @@ def report_config(args):
 
 def output_prefix(args):
     mode = "eager" if args.phase == "prefill" or args.enforce_eager else "cudagraph"
-    return args.output_dir / f"{args.phase}-{mode}"
+    suffix = "-fused-qkv" if getattr(args, "fuse_decode_qk_rope_cache", False) else ""
+    return args.output_dir / f"{args.phase}-{mode}{suffix}"
 
 
 def run_torch_profile(llm, args):
@@ -343,6 +346,7 @@ def main():
     llm = LLM(
         os.path.expanduser(args.model),
         enforce_eager=args.enforce_eager,
+        fuse_decode_qk_rope_cache=args.fuse_decode_qk_rope_cache,
         tensor_parallel_size=args.tensor_parallel_size,
         max_num_seqs=args.batch_size,
         max_num_batched_tokens=args.max_num_batched_tokens,

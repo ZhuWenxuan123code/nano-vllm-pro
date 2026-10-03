@@ -10,6 +10,11 @@ device_ids="${CUDA_VISIBLE_DEVICES:-1}"
 result_dir="${RESULT_DIR:-benchmarks/results/baseline}"
 runs="${RUNS:-5}"
 rms_norm_backend="${RMS_NORM_BACKEND:-compiled}"
+fuse_decode="${FUSE_DECODE_QK_ROPE_CACHE:-0}"
+extra_args=()
+if [[ "$fuse_decode" == "1" ]]; then
+  extra_args+=(--fuse-decode-qk-rope-cache)
+fi
 
 for ((run = 1; run <= runs; run++)); do
   CUDA_VISIBLE_DEVICES="$device_ids" "$python_bin" bench.py \
@@ -20,6 +25,7 @@ for ((run = 1; run <= runs; run++)); do
     --output-len 32 \
     --max-model-len 4096 \
     --rms-norm-backend "$rms_norm_backend" \
+    "${extra_args[@]}" \
     --seed 0 \
     --warmup-runs 1 \
     --output-json "$result_dir/prefill-${run}.json"

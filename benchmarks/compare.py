@@ -43,7 +43,7 @@ def config_mismatches(baseline, candidate):
     return sorted(
         key
         for key in keys
-        if key != "rms_norm_backend"
+        if key not in ("rms_norm_backend", "fuse_decode_qk_rope_cache")
         if baseline_config.get(key) != candidate_config.get(key)
     )
 
@@ -76,6 +76,10 @@ def compare_cases(baseline_cases, candidate_cases):
         candidate_backend = candidate[0].get("config", {}).get("rms_norm_backend", "compiled")
         if baseline_backend != candidate_backend:
             lines.append(f"RMSNorm backend: {baseline_backend} -> {candidate_backend}")
+        baseline_fused = baseline[0].get("config", {}).get("fuse_decode_qk_rope_cache", False)
+        candidate_fused = candidate[0].get("config", {}).get("fuse_decode_qk_rope_cache", False)
+        if baseline_fused != candidate_fused:
+            lines.append(f"Decode QKV fusion: {baseline_fused} -> {candidate_fused}")
         if mismatches:
             lines.append(
                 "Warning: configuration differs for " + ", ".join(mismatches)

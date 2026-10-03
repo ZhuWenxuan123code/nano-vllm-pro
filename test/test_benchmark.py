@@ -36,6 +36,10 @@ class BenchmarkHelpersTest(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 parse_args(["--rms-norm-backend", "invalid"])
 
+    def test_decode_fusion_is_opt_in(self):
+        self.assertFalse(parse_args([]).fuse_decode_qk_rope_cache)
+        self.assertTrue(parse_args(["--fuse-decode-qk-rope-cache"]).fuse_decode_qk_rope_cache)
+
     def test_single_token_output_has_no_decode_metrics(self):
         class FakeCuda:
 

@@ -39,6 +39,11 @@ class ProfileHelpersTest(unittest.TestCase):
                 ]
             )
 
+    def test_decode_fusion_profile_prefix(self):
+        args = parse_args(["--phase", "decode", "--fuse-decode-qk-rope-cache",
+                           "--output-dir", "profiles"])
+        self.assertEqual(output_prefix(args), Path("profiles/decode-cudagraph-fused-qkv"))
+
     def test_profiler_summary_excludes_annotations_and_memcpy(self):
         events = [
             SimpleNamespace(

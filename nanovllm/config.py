@@ -13,6 +13,7 @@ class Config:
     tensor_parallel_size: int = 1
     enforce_eager: bool = False
     rms_norm_backend: str = "compiled"
+    fuse_decode_qk_rope_cache: bool = False
     hf_config: AutoConfig | None = None
     eos: int = -1
     kvcache_block_size: int = 256

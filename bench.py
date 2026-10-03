@@ -63,6 +63,10 @@ def parse_args(argv=None):
         "--rms-norm-backend", choices=("compiled", "triton"), default="compiled",
         help="RMSNorm implementation used by every model runner.",
     )
+    parser.add_argument(
+        "--fuse-decode-qk-rope-cache", action="store_true",
+        help="Fuse Decode Q/K Norm, RoPE and paged KV cache writes.",
+    )
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.9)
     parser.add_argument(
         "--enforce-eager",
@@ -226,6 +230,7 @@ def main():
         enforce_eager=args.enforce_eager,
         tensor_parallel_size=args.tensor_parallel_size,
         rms_norm_backend=args.rms_norm_backend,
+        fuse_decode_qk_rope_cache=args.fuse_decode_qk_rope_cache,
         max_num_seqs=args.max_num_seqs,
         max_num_batched_tokens=args.max_num_batched_tokens,
         max_model_len=args.max_model_len,
@@ -276,6 +281,7 @@ def main():
             "max_model_len": args.max_model_len,
             "tensor_parallel_size": args.tensor_parallel_size,
             "rms_norm_backend": args.rms_norm_backend,
+            "fuse_decode_qk_rope_cache": args.fuse_decode_qk_rope_cache,
             "gpu_memory_utilization": args.gpu_memory_utilization,
             "enforce_eager": args.enforce_eager,
             "temperature": args.temperature,

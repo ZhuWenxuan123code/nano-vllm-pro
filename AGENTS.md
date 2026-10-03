@@ -34,5 +34,5 @@
 近期提交使用简短祈使式摘要，常带 conventional scope，例如：
 `fix(scheduler): recalculate num_tokens after allocate`。修复或新功能应沿用此格式，
 例如 `feat(engine): add request validation`，且每个提交只处理一项明确变更。PR 应
-说明行为变化、受影响的模型或配置、已执行的验证；适用时关联 Issue。性能相关改动
+说明行为变化、受影响的模型或配能相关改动置、已执行的验证；适用时关联 Issue。性
 应附上基准结果。不要提交模型权重、缓存或生成的性能分析产物。

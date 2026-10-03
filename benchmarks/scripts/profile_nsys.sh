@@ -37,6 +37,10 @@ if [[ "$eager" == "1" ]]; then
 elif [[ "$phase" == "decode" ]]; then
   mode="cudagraph"
 fi
+if [[ "${FUSE_DECODE_QK_ROPE_CACHE:-0}" == "1" ]]; then
+  extra_args+=(--fuse-decode-qk-rope-cache)
+  mode="$mode-fused-qkv"
+fi
 mkdir -p "$output_dir"
 report_base="$output_dir/$phase-$mode"
 

@@ -31,6 +31,20 @@ P1 RMSNorm 对照可设置 `RMS_NORM_BACKEND=compiled`（默认）或 `triton`�
 `bash benchmarks/scripts/run_p1_rmsnorm.sh`，并通过 `PYTHON_BIN`、
 `CUDA_VISIBLE_DEVICES`、`RUNS`、`RESULT_ROOT` 覆盖默认环境。
 
+P2 Decode Q/K Norm + RoPE + KV 写入融合可通过
+`bench.py --fuse-decode-qk-rope-cache` 启用；默认仍用原路径，Prefill 不变。
+单层 CUDA Graph 对照：
+
+```bash
+CUDA_VISIBLE_DEVICES=1 python benchmarks/bench_decode_qkv.py \
+  --output-json benchmarks/results/p2-decode-qkv-gpu1/prototype-b64.json
+```
+
+完整原/新路径 A/B（固定 `RMS_NORM_BACKEND=compiled`）使用
+`CUDA_VISIBLE_DEVICES=1 RESULT_ROOT=benchmarks/results/p2-decode-qkv-gpu1 bash benchmarks/scripts/run_p2_decode_qkv.sh`。现有 profiling 脚本也接受
+`FUSE_DECODE_QK_ROPE_CACHE=1`；请给两组设置不同的 `PROFILE_DIR`，
+避免混淆报告。
+
 汇总某个目录中的多次结果：
 
 ```bash

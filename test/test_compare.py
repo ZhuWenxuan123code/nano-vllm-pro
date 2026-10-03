@@ -51,6 +51,15 @@ class CompareTest(unittest.TestCase):
         self.assertIn("RMSNorm backend: compiled -> triton", table)
         self.assertNotIn("Warning: configuration differs", table)
 
+    def test_decode_fusion_difference_is_expected(self):
+        baseline = report(100, 10)
+        candidate = report(105, 9)
+        baseline["config"] = {"rms_norm_backend": "compiled", "fuse_decode_qk_rope_cache": False}
+        candidate["config"] = {"rms_norm_backend": "compiled", "fuse_decode_qk_rope_cache": True}
+        table = compare_cases({"decode": [baseline]}, {"decode": [candidate]})
+        self.assertIn("Decode QKV fusion: False -> True", table)
+        self.assertNotIn("Warning: configuration differs", table)
+
 
 if __name__ == "__main__":
     unittest.main()

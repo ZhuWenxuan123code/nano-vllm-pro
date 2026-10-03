@@ -6,7 +6,7 @@ from multiprocessing.shared_memory import SharedMemory
 
 from nanovllm.config import Config
 from nanovllm.engine.sequence import Sequence
-from nanovllm.models.qwen3 import Qwen3ForCausalLM
+from nanovllm.models.qwen3 import Qwen3ForCausalLM, Qwen3Attention
 from nanovllm.layers.sampler import Sampler
 from nanovllm.layers.layernorm import RMSNorm
 from nanovllm.utils.context import set_context, get_context, reset_context
@@ -33,6 +33,8 @@ class ModelRunner:
         for module in self.model.modules():
             if isinstance(module, RMSNorm):
                 module.set_backend(config.rms_norm_backend)
+            elif isinstance(module, Qwen3Attention):
+                module.fuse_decode_qk_rope_cache = config.fuse_decode_qk_rope_cache
         load_model(self.model, config.model)
         self.sampler = Sampler()
         self.warmup_model()
