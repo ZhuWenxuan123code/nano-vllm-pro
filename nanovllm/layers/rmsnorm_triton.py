@@ -12,11 +12,18 @@ def _rmsnorm_kernel(
     num_heads: tl.constexpr, hidden_size: tl.constexpr, eps: tl.constexpr,
     block_size: tl.constexpr,
 ):
-    row = tl.program_id(0)
+    row = tl.program_id(0)  # 每个 program 处理一个最后维度上的向量。
     cols = tl.arange(0, block_size)
-    x_offset = (row // num_heads) * x_stride0 + (row % num_heads) * x_stride1
-    x = tl.load(x_ptr + x_offset + cols * x_stride2, cols < hidden_size, other=0).to(tl.float32)
-    var = tl.sum(x * x, 0) / hidden_size
+    x_offset = (
+        (row // num_heads) * x_stride0
+        + (row % num_heads) * x_stride1
+    )
+    x = tl.load(
+        x_ptr + x_offset + cols * x_stride2,
+        cols < hidden_size,
+        other=0,
+    ).to(tl.float32)  # 包含 block_size 个元素，越界位置填零。
+    var = tl.sum(x * x, 0) / hidden_size  # 对有效元素计算平方均值。
     norm = (x * tl.rsqrt(var + eps)).to(out_ptr.dtype.element_ty).to(tl.float32)
     weight = tl.load(weight_ptr + cols, cols < hidden_size, other=0).to(tl.float32)
     tl.store(out_ptr + row * hidden_size + cols, norm * weight, cols < hidden_size)
@@ -34,6 +41,7 @@ def _add_rmsnorm_kernel(
     cols = tl.arange(0, block_size)
     x_offset = (row // num_heads) * x_stride0 + (row % num_heads) * x_stride1
     residual_offset = (row // num_heads) * residual_stride0 + (row % num_heads) * residual_stride1
+
     x = tl.load(x_ptr + x_offset + cols * x_stride2, cols < hidden_size, other=0).to(tl.float32)
     residual = tl.load(residual_ptr + residual_offset + cols * residual_stride2,
                        cols < hidden_size, other=0).to(tl.float32)
@@ -80,6 +88,7 @@ def rmsnorm(x: torch.Tensor, weight: torch.Tensor, eps: float) -> torch.Tensor:
     rows, num_heads, stride0, stride1, stride2 = _layout(x)
     out = torch.empty(x.shape, device=x.device, dtype=x.dtype)
     if rows:
+        # 根据 hidden_size 选择向量长度和每个 program 的 warp 数。
         block_size, num_warps = _launch_config(x.shape[-1], add=False)
         _rmsnorm_kernel[(rows,)](
             x, weight, out, stride0, stride1, stride2, num_heads,

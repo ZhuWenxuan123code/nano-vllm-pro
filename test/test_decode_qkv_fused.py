@@ -6,6 +6,7 @@ from nanovllm.layers.decode_qkv_fused import decode_qkv_fused
 from nanovllm.layers.rotary_embedding import apply_rotary_emb, RotaryEmbedding
 
 
+# PyTorch reference：用于验证融合 kernel 的 Q 输出和 KV Cache 写入。
 def reference(qkv, q_weight, k_weight, rope, positions, slots, k_cache, v_cache):
     batch, kv_heads, head_dim = qkv.shape[0], k_cache.shape[-2], k_cache.shape[-1]
     q_heads = qkv.shape[1] // head_dim - 2 * kv_heads
