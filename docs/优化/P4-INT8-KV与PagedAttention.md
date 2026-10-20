@@ -85,6 +85,8 @@ CPU 测试发现 67 项（40 项执行通过、27 项需要 GPU/模型而跳过�
 
 有收益也有回退，不用单个形状概括整体。离线搜索 `tile=32/64/128`、`warps=4/8`、`splits=1/2/4/8/16`；跨 9 个形状，tile=32/warps=4 在各形状选择最合适 split 后，相对逐形状最优的几何平均差距约 1.9%。因此首版固化该 tile/warps 和元数据驱动 split 规则，不在计时/Graph 捕获中 autotune。这仍是有限形状的选择，不承诺跨硬件最优。
 
+补充分块归因实验见 [PagedAttention 分块消融](P4-PagedAttention分块消融.md)：独立改变 query/KV tile，并将 Triton 的 M/N/warps 对齐原 FlashAttention 路径，以检验分块配置对所测性能差异的影响。
+
 ### 当前 K32 单层矩阵
 
 `benchmarks/results/p4-k32-gpu1/` 下 `tuning.json` 保留 270 组配置，`layers.json` 保留 20 个主形状，`variants.json` 保留 32 个 head/GQA 变体。全部数值对照通过，无失败形状。每个配置五轮测量、轮换后端顺序，每轮 CUDA Graph 多次 replay 取 median，再取五轮中位数；不在计时中调参。INT8 实现误差对照同一量化缓存显式反量化后的 FlashAttention。
@@ -138,6 +140,29 @@ Triton Decode 主 kernel 为 1 次，split>1 时另有 1 次归约；本轮 Nsig
 主实验各组 E2E 五轮样本标准差/均值为 0.06%～1.19%。完整八指标对比保留在 `flash-vs-triton.md` 和 `flash-vs-int8.md`。TTFT 为离线请求入队至观察到首 token 的时间；TPOT 是每请求首末 token 间的平均间隔，**TPOT P99 不是逐 token ITL P99**。Prefill/Decode 吞吐按完成 step 的墙钟时间统计，不是 profiler 的纯 kernel 时间。
 
 高精度 Triton 的 decode-heavy E2E +12.52% 是本配置的整模型收益，不是所有场景的保证。INT8 在五组同负载中均回退，不推荐作为速度优化默认开启。INT8 的 balanced/prefill-heavy TTFT P99 更低，但更多 slots 改变了驻留与重计算：两条 BF16 路径分别处理 293408/275976 个 Prefill token，INT8 均为原始 262144 token。因此这些延迟改善不能全部归因于 kernel；同预算容量与单层延迟必须分别解释。16K 这里只测了合成负载性能，未验证 16K 真实文本困惑度。
+
+### 2026-10-12 高精度 Decode-heavy 独立复验
+
+为复核简历中的 12.52% 提升，在物理 GPU1（UUID `GPU-e9e4afed-ebf4-e4ec-28e4-598dada14eac`）完成 Flash BF16 / Triton BF16 各五次。沿用上文 Decode-heavy 配置、runtime 计时、32 个 Decode step 预热及 CUDA Graph；P2 off、P3 original、RMSNorm compiled、scheduler legacy。每轮交替后端顺序（F/T、T/F、F/T、T/F、F/T），均为独立进程，不带 profiler。
+
+当前代码包含 P5，源码 SHA256 为 `2ea9432a983eba83c500766c6591ba08df6298d803948d5b4001f89f94a1ff35`，与原 P4 历史版本不同，因此属于当前版本复验。十份结果的源码哈希相同，记录的配置唯一差异为 Attention 后端；每次均为 703 个 BF16 cache blocks、32768 输入 token、131072 输出 token、4 个 Prefill step、2044 个 Decode step、0 个 mixed step。日志未发现错误或编译回退警告。本轮验证性能可重复性，没有重新执行全套数值/质量测试。
+
+| 轮次 | Flash BF16 output tok/s | Triton BF16 output tok/s | 同轮提升 |
+| --- | ---: | ---: | ---: |
+| 1 | 7446.24 | 8236.94 | +10.62% |
+| 2 | 7292.35 | 8209.81 | +12.58% |
+| 3 | 7278.65 | 8187.46 | +12.49% |
+| 4 | 7178.50 | 8162.45 | +13.71% |
+| 5 | 7187.54 | 8167.46 | +13.63% |
+| 中位数 | 7278.65 | 8187.46 | **+12.49%** |
+| 均值 | 7276.66 | 8192.82 | +12.59% |
+| 样本标准差 | 107.92 | 30.94 | — |
+
+TPOT P50 的五轮中位数由 **21.60 ms 降至 19.29 ms（-10.73%）**；Decode 吞吐由 7499.64 升至 8471.86 tok/s（+12.96%），Prefill 吞吐基本持平（-0.01%）。Triton 最慢一次仍快于 Flash 最快一次，支持在所测配置下可重复获得约 12.5% 的端到端吞吐提升；历史 12.52% 保留为原实验结果，不与新样本混算。
+
+本轮未锁 GPU 时钟，试验前快照中 GPU1 温度由 33°C 上升到最高 76°C，Flash/Triton 吞吐变异系数分别为 1.48%/0.38%；绝对性能存在时间漂移。GPU1 在进程抽查时仅有本实验进程，GPU0/GPU2 有其他任务，主机并非完全独占，不能将波动全部归因于温度，也不宣称精确增益恒为 12.49%。
+
+完整 JSON、日志、每次运行前 GPU 状态、对比表、统计和审计均保存在 `benchmarks/results/p4-bf16-recheck-20261012-zPd4ik/`（忽略提交）。`reproduce.sh` 保存实际执行命令；再次运行前应改用新结果目录，避免覆盖本次证据。`audit.py` 核对十份配置、源码哈希、工作量及吞吐计算，生成 `audit.json`；`comparison.md` 为自动生成的完整指标对照。
 
 ### P2 + buffered 组合
 

@@ -12,7 +12,7 @@ class PagedAttentionTest(unittest.TestCase):
     def setUp(self):
         torch.manual_seed(41)
 
-    def _case(self, dtype, dim, group, splits, lengths=(0, 1, 255, 256, 257)):
+    def _case(self, dtype, dim, group, splits, lengths=(0, 1, 255, 256, 257), block_m=None):
         batch, kv_heads = len(lengths), 2
         q = torch.randn(batch, kv_heads * group, dim * 2, device="cuda", dtype=dtype)[..., ::2]
         k = torch.randn(batch * 2, 256, kv_heads, dim, device="cuda", dtype=dtype)
@@ -21,7 +21,7 @@ class PagedAttentionTest(unittest.TestCase):
         table = torch.randperm(batch * 2, device="cuda").reshape(batch, 2).to(torch.int32)
         lens = torch.tensor(lengths, device="cuda", dtype=torch.int32)
         original = (q.clone(), k.clone(), v.clone())
-        output = paged_decode_attention(q, k, v, table, lens, num_splits=splits)
+        output = paged_decode_attention(q, k, v, table, lens, num_splits=splits, block_m=block_m)
         reference = flash_attn_with_kvcache(q[:, None], k, v, cache_seqlens=lens,
                                           block_table=table)[:, 0]
         tolerance = 3e-3 if dtype == torch.float16 else 2e-2
@@ -50,6 +50,12 @@ class PagedAttentionTest(unittest.TestCase):
     def test_split_kv(self):
         for splits in (2, 4, 8, 16):
             self._case(torch.bfloat16, 128, 2, splits)
+
+    def test_query_tile_override(self):
+        for block_m in (16, 32, 64):
+            for splits in (1, 4):
+                with self.subTest(block_m=block_m, splits=splits):
+                    self._case(torch.bfloat16, 128, 2, splits, block_m=block_m)
 
     def test_graph_replay_ragged_padding(self):
         q, k, v, table, lens = self._case(torch.bfloat16, 128, 2, 4)

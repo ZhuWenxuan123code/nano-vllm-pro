@@ -104,7 +104,8 @@ def _merge_attention(Partial, Out, p0: tl.constexpr, p1: tl.constexpr, p2: tl.co
 
 def paged_decode_attention(q, k_cache, v_cache, block_tables, context_lens,
                            softmax_scale=None, k_scale=None, v_scale=None,
-                           workspace=None, num_splits=None, block_n=None, num_warps=None):
+                           workspace=None, num_splits=None, block_n=None, num_warps=None,
+                           block_m=None):
     if q.ndim != 3 or q.dtype not in (torch.float16, torch.bfloat16):
         raise ValueError("Q must be [batch, heads, dimension], FP16/BF16")
     if k_cache.ndim != 4 or v_cache.shape != k_cache.shape:
@@ -134,6 +135,10 @@ def paged_decode_attention(q, k_cache, v_cache, block_tables, context_lens,
     num_splits = splits if num_splits is None else num_splits
     block_n = tile if block_n is None else block_n
     num_warps = warps if num_warps is None else num_warps
+    # Optional offline ablation knob; model execution retains the original rule.
+    block_m = max(16, triton.next_power_of_2(group)) if block_m is None else block_m
+    if block_m not in (16, 32, 64) or block_m < group:
+        raise ValueError("Unsupported query tile size")
     if num_splits not in (1, 2, 4, 8, 16) or block_n not in (32, 64, 128) or num_warps not in (4, 8):
         raise ValueError("Unsupported split/tile/warp configuration")
     if workspace is None:
@@ -149,7 +154,7 @@ def paged_decode_attention(q, k_cache, v_cache, block_tables, context_lens,
             v_scale if quantized else v_cache, block_tables, context_lens, out, partial,
             *q.stride(), *block_tables.stride(), *partial.stride()[:3],
             kv_heads, group, dim, page, softmax_scale or dim ** -0.5, num_splits,
-            quantized, max(16, triton.next_power_of_2(group)), block_n,
+            quantized, block_m, block_n,
             num_warps=num_warps, num_stages=2,
         )
         if num_splits > 1:
