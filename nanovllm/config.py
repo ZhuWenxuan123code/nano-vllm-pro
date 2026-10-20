@@ -17,6 +17,14 @@ class Config:
     execution_mode: str = "original"
     attention_backend: str = "flash"
     kv_cache_dtype: str = "auto"
+    scheduler_policy: str = "legacy"
+    prefill_token_budget: int = 256
+    prefill_budget_min: int = 64
+    prefill_budget_max: int = 1024
+    ttft_slo_ms: float = 2000.0
+    itl_slo_ms: float = 50.0
+    prefill_max_wait_ms: float = 1000.0
+    kv_cache_block_limit: int | None = None
     profile_stages: bool = False
     hf_config: AutoConfig | None = None
     eos: int = -1
@@ -24,6 +32,18 @@ class Config:
     num_kvcache_blocks: int = -1
 
     def __post_init__(self):
+        if self.scheduler_policy not in ("legacy", "mixed", "adaptive"):
+            raise ValueError(f"unsupported scheduler policy: {self.scheduler_policy}")
+        if (self.prefill_budget_min < 64 or self.prefill_budget_min % 64 or
+                self.prefill_budget_max < self.prefill_budget_min or self.prefill_budget_max % 64 or
+                self.prefill_token_budget <= 0):
+            raise ValueError("Prefill limits must be ordered multiples of 64; fixed budget must be positive")
+        if min(self.ttft_slo_ms, self.itl_slo_ms, self.prefill_max_wait_ms) <= 0:
+            raise ValueError("Latency targets must be positive")
+        if self.kv_cache_block_limit is not None and self.kv_cache_block_limit <= 0:
+            raise ValueError("KV block limit must be positive")
+        if self.scheduler_policy != "legacy" and self.max_num_batched_tokens < self.max_num_seqs:
+            raise ValueError("Mixed scheduling requires token budget >= maximum sequence count")
         if self.attention_backend not in ("flash", "triton"):
             raise ValueError(f"unsupported attention backend: {self.attention_backend}")
         if self.kv_cache_dtype not in ("auto", "int8"):

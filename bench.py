@@ -82,6 +82,9 @@ def parse_args(argv=None):
     parser.add_argument("--kv-cache-dtype", choices=("auto", "int8"), default="auto")
     parser.add_argument("--measurement-mode", choices=("sync", "runtime"), default="sync",
                         help="sync: synchronize every step; runtime: only at run boundaries.")
+    parser.add_argument("--scheduler-policy", choices=("legacy", "mixed", "adaptive"), default="legacy")
+    parser.add_argument("--prefill-token-budget", type=int, default=256)
+    parser.add_argument("--kv-cache-block-limit", type=int)
     parser.add_argument("--warmup-decode-steps", type=int, default=0,
                         help="Representative warmup with max-num-seqs prompts; 0 keeps legacy warmup.")
     parser.add_argument(
@@ -189,6 +192,9 @@ def run_benchmark(llm: LLM, prompts, sampling_params, torch, measurement_mode="s
     prefill_tokens = decode_tokens = 0
     prefill_steps = decode_steps = 0
     prefill_time = decode_time = 0.0
+    mixed_steps = 0
+    mixed_time = 0.0
+    mixed_prefill_tokens = mixed_decode_tokens = 0
 
     torch.cuda.synchronize()
     torch.cuda.reset_peak_memory_stats()
@@ -201,7 +207,12 @@ def run_benchmark(llm: LLM, prompts, sampling_params, torch, measurement_mode="s
         step_end = perf_counter()
         step_elapsed = step_end - step_start
 
-        if info.is_prefill:
+        if getattr(info, "phase", "") == "mixed":
+            mixed_steps += 1
+            mixed_time += step_elapsed
+            mixed_prefill_tokens += info.prefill_tokens
+            mixed_decode_tokens += info.decode_tokens
+        elif info.is_prefill:
             prefill_tokens += info.num_scheduled_tokens
             prefill_steps += 1
             prefill_time += step_elapsed
@@ -233,6 +244,10 @@ def run_benchmark(llm: LLM, prompts, sampling_params, torch, measurement_mode="s
         "decode_tokens": decode_tokens,
         "prefill_steps": prefill_steps,
         "decode_steps": decode_steps,
+        "mixed_steps": mixed_steps,
+        "mixed_seconds": mixed_time,
+        "mixed_prefill_tokens": mixed_prefill_tokens,
+        "mixed_decode_tokens": mixed_decode_tokens,
         "elapsed_seconds": elapsed,
         "prefill_seconds": prefill_time,
         "decode_seconds": decode_time,
@@ -269,6 +284,9 @@ def main():
         execution_mode=args.execution_mode,
         attention_backend=args.attention_backend,
         kv_cache_dtype=args.kv_cache_dtype,
+        scheduler_policy=args.scheduler_policy,
+        prefill_token_budget=args.prefill_token_budget,
+        kv_cache_block_limit=args.kv_cache_block_limit,
         max_num_seqs=args.max_num_seqs,
         max_num_batched_tokens=args.max_num_batched_tokens,
         max_model_len=args.max_model_len,
@@ -338,6 +356,9 @@ def main():
             "execution_mode": args.execution_mode,
             "attention_backend": args.attention_backend,
             "kv_cache_dtype": args.kv_cache_dtype,
+            "scheduler_policy": args.scheduler_policy,
+            "prefill_token_budget": args.prefill_token_budget,
+            "kv_cache_block_limit": args.kv_cache_block_limit,
             "measurement_mode": args.measurement_mode,
             "phase_timing": "completed_step_wall_time",
             "warmup_decode_steps": args.warmup_decode_steps,

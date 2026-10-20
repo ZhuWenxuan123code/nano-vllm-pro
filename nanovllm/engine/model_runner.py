@@ -7,6 +7,7 @@ from multiprocessing.shared_memory import SharedMemory
 from nanovllm.config import Config
 from nanovllm.engine.sequence import Sequence
 from nanovllm.engine.decode_buffers import DecodeInputBuffers, graph_batch_sizes
+from nanovllm.engine.scheduled_batch import tp_shm_capacity
 from nanovllm.models.qwen3 import Qwen3ForCausalLM, Qwen3Attention
 from nanovllm.layers.sampler import Sampler
 from nanovllm.layers.layernorm import RMSNorm
@@ -24,6 +25,7 @@ class ModelRunner:
         self.config = config
         hf_config = config.hf_config
         self.block_size = config.kvcache_block_size
+        Sequence.block_size = self.block_size
         self.enforce_eager = config.enforce_eager
         self.world_size = config.tensor_parallel_size
         self.rank = rank
@@ -59,7 +61,11 @@ class ModelRunner:
 
         if self.world_size > 1:
             if rank == 0:
-                self.shm = SharedMemory(name="nanovllm", create=True, size=2**20)
+                # Prefix hits can leave one query per very long prompt, so
+                # query-token budget is not a bound on serialized TP history.
+                shm_size = tp_shm_capacity(config.max_num_seqs, config.max_model_len,
+                                          self.block_size, config.scheduler_policy)
+                self.shm = SharedMemory(name="nanovllm", create=True, size=shm_size)
                 dist.barrier()
             else:
                 dist.barrier()
@@ -97,6 +103,8 @@ class ModelRunner:
         assert self.world_size > 1 and self.rank == 0
         data = pickle.dumps([method_name, *args])
         n = len(data)
+        if n + 4 > len(self.shm.buf):
+            raise ValueError("Scheduled batch exceeds TP shared-memory capacity")
         self.shm.buf[0:4] = n.to_bytes(4, "little")
         self.shm.buf[4:n+4] = data
         for event in self.event:
@@ -150,6 +158,10 @@ class ModelRunner:
             dist.all_reduce(capacity, op=dist.ReduceOp.MIN)
             config.num_kvcache_blocks = int(capacity.item())
         assert config.num_kvcache_blocks > 0
+        if config.kv_cache_block_limit is not None:
+            if config.num_kvcache_blocks < config.kv_cache_block_limit:
+                raise ValueError("Requested KV block limit exceeds available GPU memory")
+            config.num_kvcache_blocks = config.kv_cache_block_limit
         self.allocate_cache_storage(config.num_kvcache_blocks)
 
     def allocate_cache_storage(self, num_blocks):
@@ -285,6 +297,57 @@ class ModelRunner:
         temperatures = [seq.temperature for seq in seqs]
         temperatures = torch.tensor(temperatures, dtype=torch.float32, pin_memory=True).cuda(non_blocking=True)
         return temperatures
+
+    def prepare_mixed(self, batch):
+        ids, positions, slots, cu_q = [], [], [], [0]
+        pq, pk, lengths = [0], [0], []
+        max_q = max_k = 0
+        uses_cache = False
+        for seq, prefill, count in zip(batch.seqs, batch.prefill, batch.query_lens):
+            start = seq.num_cached_tokens
+            end = start + count
+            ids.extend(seq[start:end] if prefill else [seq.last_token])
+            positions.extend(range(start, end))
+            slots.extend(seq.block_table[i // self.block_size] * self.block_size + i % self.block_size
+                         for i in range(start, end))
+            cu_q.append(cu_q[-1] + count)
+            if prefill:
+                pq.append(pq[-1] + count)
+                pk.append(pk[-1] + end)
+                max_q, max_k = max(max_q, count), max(max_k, end)
+                uses_cache |= start > 0
+            else:
+                lengths.append(end)
+        def upload(values, dtype):
+            return torch.tensor(values, dtype=dtype, device="cpu", pin_memory=True).to(
+                f"cuda:{self.rank}", non_blocking=True)
+        set_context(True, cu_seqlens_q=upload(cu_q, torch.int32),
+                    slot_mapping=upload(slots, torch.int32),
+                    context_lens=upload(lengths, torch.int32),
+                    block_tables=self.prepare_block_tables(batch.seqs), phase="mixed",
+                    num_decode=batch.num_decode, prefill_cu_q=upload(pq, torch.int32),
+                    prefill_cu_k=upload(pk, torch.int32), prefill_max_q=max_q,
+                    prefill_max_k=max_k, prefill_uses_cache=uses_cache)
+        return upload(ids, torch.int64), upload(positions, torch.int64)
+
+    def run_batch(self, batch):
+        if batch.phase != "mixed":
+            return self.run(batch.seqs, batch.phase == "prefill")
+        enabled = self.config.profile_stages
+        try:
+            with profile_range("nanovllm::prepare_mixed", enabled):
+                inputs, positions = self.prepare_mixed(batch)
+                temperatures = self.prepare_sample(batch.seqs) if self.rank == 0 else None
+            with profile_range("nanovllm::mixed_model", enabled):
+                logits = self.run_model(inputs, positions, True)
+            if self.rank != 0:
+                return None
+            with profile_range("nanovllm::sample", enabled):
+                tokens = self.sampler(logits, temperatures)
+            with profile_range("nanovllm::d2h", enabled):
+                return tokens.tolist()
+        finally:
+            reset_context()
 
     @torch.inference_mode()
     def run_model(self, input_ids: torch.Tensor, positions: torch.Tensor, is_prefill: bool):

@@ -69,6 +69,14 @@ class Attention(nn.Module):
                 store_int8_kvcache(k, v, k_cache, v_cache, self.k_scale, self.v_scale, context.slot_mapping)
             else:
                 store_kvcache(k, v, k_cache, v_cache, context.slot_mapping)
+        if context.phase == "mixed":
+            count = context.num_decode
+            decode = self.forward_decode_cached(q[:count], context.block_tables[:count], context.context_lens)
+            tables = context.block_tables[count:] if context.prefill_uses_cache else None
+            prefill = self.forward_prefill(q[count:], k[count:], v[count:], context.prefill_cu_q,
+                                          context.prefill_cu_k, context.prefill_max_q,
+                                          context.prefill_max_k, tables)
+            return torch.cat((decode.reshape(count, self.num_heads, self.head_dim), prefill), dim=0)
         if context.is_prefill:
             if context.block_tables is not None and k_cache.dtype == torch.int8:
                 return paged_prefill_attention(
@@ -84,15 +92,27 @@ class Attention(nn.Module):
             o = self.forward_decode_cached(q)
         return o
 
-    def forward_decode_cached(self, q: torch.Tensor):
+    def forward_prefill(self, q, k, v, cu_q, cu_k, max_q, max_k, tables):
+        if tables is not None and self.k_cache.dtype == torch.int8:
+            return paged_prefill_attention(q, self.k_cache, self.v_cache, tables, cu_q,
+                                          cu_k, max_q, self.scale, self.k_scale, self.v_scale)
+        if tables is not None:
+            k, v = self.k_cache, self.v_cache
+        return flash_attn_varlen_func(q, k, v, max_seqlen_q=max_q, cu_seqlens_q=cu_q,
+                                     max_seqlen_k=max_k, cu_seqlens_k=cu_k,
+                                     softmax_scale=self.scale, causal=True, block_table=tables)
+
+    def forward_decode_cached(self, q: torch.Tensor, block_tables=None, context_lens=None):
         """Decode attention when this step's K/V have already been written."""
         context = get_context()
+        block_tables = context.block_tables if block_tables is None else block_tables
+        context_lens = context.context_lens if context_lens is None else context_lens
         if self.backend == "triton":
-            return paged_decode_attention(q, self.k_cache, self.v_cache, context.block_tables,
-                                          context.context_lens, self.scale, self.k_scale,
+            return paged_decode_attention(q, self.k_cache, self.v_cache, block_tables,
+                                          context_lens, self.scale, self.k_scale,
                                           self.v_scale, self.workspace)
         return flash_attn_with_kvcache(
             q.unsqueeze(1), self.k_cache, self.v_cache,
-            cache_seqlens=context.context_lens, block_table=context.block_tables,
+            cache_seqlens=context_lens, block_table=block_tables,
             softmax_scale=self.scale, causal=True,
         )

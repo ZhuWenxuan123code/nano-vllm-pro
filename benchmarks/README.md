@@ -118,3 +118,23 @@ CUDA_VISIBLE_DEVICES=1 bash benchmarks/scripts/profile_p3_runner.sh
 后者生成三次 CUDA Graph node 时间线和 `gate.json`，用于决定是否进入异步阶段。
 两者都需要空闲 GPU；性能测试不带 profiler。具体状态和计时定义见
 [P3 文档](../docs/优化/P3-输入缓冲与异步执行.md)。
+
+## P5 在线混合调度
+
+`bash benchmarks/scripts/run_p5.sh` 在物理 GPU1 上分阶段执行在线标定、
+固定预算扫描、180 次主对照和 30 次组合对照。默认结果目录为
+`benchmarks/results/p5-scheduling-controlled-gpu1/`；使用 `P5_STAGE` 分阶段执行，
+使用 `PYTHON_BIN` 指定解释器。完整矩阵包含长上下文，运行时间明显长于离线单次 bench。
+
+`P5_STAGE=summarize` 可生成阶段性汇总，表头和 `coverage.json` 明确标注
+尚未完成的矩阵，不能把不足五轮的档位当作最终对照。完成后再刷新汇总；
+使用过自定义 `RUNS` 时，汇总也需透传相同值。
+
+当前 GPU1 正式矩阵已完成全部 282 次，主/组合共 42 个档位各重复五次，
+两份 coverage 均为 complete，并完成全结果审计。固定混合策略仅在部分负载获益，
+自适应策略有明显回退；实验完成不代表所有策略满足 SLO，默认仍使用 legacy。
+
+`benchmarks/bench_online.py --scheduler-policy legacy|mixed|adaptive` 支持
+固定到达轨迹，报告真实逐 token ITL 和满足 TTFT/全部 ITL 目标的有效吞吐。
+这些在线指标与旧离线 TPOT 不是同一口径。混合批次走 Eager，纯 Decode 保留 Graph/P2。
+详见 [P5 实现与验收](../docs/优化/P5-混合调度与自适应预算.md)。

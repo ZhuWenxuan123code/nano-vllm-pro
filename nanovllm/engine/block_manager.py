@@ -92,6 +92,15 @@ class BlockManager:
             seq.block_table.append(self._allocate_block())
         seq.num_cached_tokens = num_cached_blocks * self.block_size
 
+    def allocation_cost(self, seq: Sequence, num_cached_blocks: int) -> int:
+        """Free pages consumed, including free (rather than live) prefix hits."""
+        h = -1
+        live_hits = 0
+        for i in range(num_cached_blocks):
+            h = self.compute_hash(seq.block(i), h)
+            live_hits += self.hash_to_block_id[h] in self.used_block_ids
+        return seq.num_blocks - live_hits
+
     def deallocate(self, seq: Sequence):
         for block_id in reversed(seq.block_table):
             block = self.blocks[block_id]
