@@ -20,9 +20,14 @@ def store_kvcache_kernel(
     slot_mapping_ptr,
     D: tl.constexpr,
 ):
+    # 前 Program 在 Grid 第 0 维上的索引。可能的值，0,1,2,3....N-1
     idx = tl.program_id(0)
+
+    # 读取当前 token 对应的物理缓存槽位
     slot = tl.load(slot_mapping_ptr + idx)
     if slot == -1: return
+    
+    # 当前 token 的 K/V 全部元素的偏移向量，而不只是起始位置
     key_offsets = idx * key_stride + tl.arange(0, D)
     value_offsets = idx * value_stride + tl.arange(0, D)
     key = tl.load(key_ptr + key_offsets)

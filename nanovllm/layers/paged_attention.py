@@ -32,16 +32,24 @@ class AttentionWorkspace:
 
 @triton.jit
 def _decode_attention(
-    Q, K, V, KS, VS, Tables, Lengths, Out, Partial,
+    Q, K, V, KS, VS,
+    Tables, Lengths, Out, Partial,
     q0: tl.constexpr, q1: tl.constexpr, q2: tl.constexpr,
     table0: tl.constexpr, table1: tl.constexpr,
     p0: tl.constexpr, p1: tl.constexpr, p2: tl.constexpr,
-    KV_HEADS: tl.constexpr, GROUP: tl.constexpr, D: tl.constexpr,
-    PAGE: tl.constexpr, SCALE: tl.constexpr, SPLITS: tl.constexpr,
-    INT8: tl.constexpr, M: tl.constexpr, N: tl.constexpr,
+    KV_HEADS: tl.constexpr,
+    GROUP: tl.constexpr,
+    D: tl.constexpr,
+    PAGE: tl.constexpr,
+    SCALE: tl.constexpr,
+    SPLITS: tl.constexpr,
+    INT8: tl.constexpr,
+    M: tl.constexpr,
+    N: tl.constexpr,
 ):
     seq, kv_head, split = tl.program_id(0), tl.program_id(1), tl.program_id(2)
     rows, cols, keys = tl.arange(0, M), tl.arange(0, D), tl.arange(0, N)
+    # 获取当前对应的 Query Heads
     heads = kv_head * GROUP + rows
     q = tl.load(Q + seq * q0 + heads[:, None] * q1 + cols[None, :] * q2,
                 rows[:, None] < GROUP, 0)
